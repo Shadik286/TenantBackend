@@ -1,0 +1,50 @@
+# dependencies
+node_modules
+.pnp
+.pnp.js
+
+# next.js
+.next/
+out/
+build/
+dist/
+
+# env
+.env
+.env.local
+.env.development.local
+.env.test.local
+.env.production.local
+!.env.example
+
+# logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+dev.err
+dev.out
+dev.log
+
+# typescript
+*.tsbuildinfo
+next-env.d.ts
+
+# IDE
+.idea/
+.vscode/
+.DS_Store
+
+# editor scratch
+.puku/
+.scratch/
+
+# prisma local db
+prisma/dev.db
+prisma/dev.db-journal
+
+# misc
+*.pid
+*.seed
+*.pid.lock

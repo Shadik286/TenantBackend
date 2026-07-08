@@ -1,0 +1,18 @@
+$base = "http://localhost:3000"
+$jar = "$PSScriptRoot\smoke-cookies.txt"
+Remove-Item $jar -ErrorAction SilentlyContinue
+
+Write-Host "1) REGISTER"
+curl.exe -sS -X POST -H "Content-Type: application/json" --data-binary "@$PSScriptRoot\register-smoke.json" -c $jar "$base/api/auth/register"
+Write-Host "`n2) LOGIN (sets next-auth.session-token cookie)"
+curl.exe -sS -X POST -H "Content-Type: application/json" --data-binary "@$PSScriptRoot\register-smoke.json" -c $jar -b $jar "$base/api/auth/login"
+Write-Host "`n3) SESSION CHECK"
+curl.exe -sS -b $jar "$base/api/auth/session"
+Write-Host "`n4) GET /api/v1/users/me"
+curl.exe -sS -b $jar "$base/api/v1/users/me"
+Write-Host "`n5) GET /api/v1/users/me/stats"
+curl.exe -sS -b $jar "$base/api/v1/users/me/stats"
+Write-Host "`n6) GET /api/v1/users/me/subscription"
+curl.exe -sS -b $jar "$base/api/v1/users/me/subscription"
+Write-Host "`n7) GET /api/v1/users/me/preferences"
+curl.exe -sS -b $jar "$base/api/v1/users/me/preferences"

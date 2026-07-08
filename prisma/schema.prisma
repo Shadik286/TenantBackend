@@ -1,0 +1,471 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider  = "postgresql"
+  url       = env("DATABASE_URL")
+  directUrl = env("DIRECT_DATABASE_URL")
+}
+
+model Plan {
+  id                  String   @id @default(uuid())
+  name                String   @unique
+  max_houses          Int
+  max_units_per_house Int      @default(5)
+  price_monthly       Decimal  @db.Decimal(14, 2)
+  features            Json
+  is_active           Boolean  @default(true)
+  created_at          DateTime @default(now())
+  updated_at          DateTime @updatedAt
+
+  subscriptions Subscription[]
+}
+
+model User {
+  id            String    @id @default(uuid())
+  email         String    @unique
+  password_hash String
+  full_name     String
+  phone         String?   @unique
+  is_verified   Boolean   @default(false)
+  is_active     Boolean   @default(true)
+  created_at    DateTime  @default(now())
+  updated_at    DateTime  @updatedAt
+  deleted_at    DateTime?
+
+  subscription Subscription?
+  houses       House[]
+  audit_logs   AuditLog[]    @relation("AuditActor")
+  preference   UserPreference?
+
+  @@index([email])
+  @@index([is_active, deleted_at])
+}
+
+model UserPreference {
+  id            String   @id @default(uuid())
+  user_id       String   @unique
+  notifications String   @default("all")
+  language      String   @default("en-US")
+  appearance    String   @default("system")
+  currency      String   @default("MAD")
+  timezone      String   @default("UTC")
+  updated_at    DateTime @updatedAt
+
+  user User @relation(fields: [user_id], references: [id], onDelete: Cascade)
+
+  @@index([user_id])
+}
+
+model Subscription {
+  id                   String             @id @default(uuid())
+  user_id              String             @unique
+  plan_id              String
+  status               SubscriptionStatus @default(ACTIVE)
+  current_period_start DateTime
+  current_period_end   DateTime
+  cancelled_at         DateTime?
+  created_at           DateTime           @default(now())
+  updated_at           DateTime           @updatedAt
+
+  user User @relation(fields: [user_id], references: [id])
+  plan Plan @relation(fields: [plan_id], references: [id])
+
+  @@index([status, current_period_end])
+}
+
+enum SubscriptionStatus {
+  ACTIVE
+  PAST_DUE
+  CANCELLED
+  TRIALING
+}
+model House {
+  id          String    @id @default(uuid())
+  owner_id    String
+  name        String
+  address     String
+  city        String
+  country     String
+  description String?
+  created_at  DateTime  @default(now())
+  updated_at  DateTime  @updatedAt
+  deleted_at  DateTime?
+
+  owner            User             @relation(fields: [owner_id], references: [id])
+  units            Unit[]
+  expenses         Expense[]
+  other_income     OtherIncome[]
+  report_snapshots ReportSnapshot[]
+  rent_charges     RentCharge[]
+  leases           Lease[]
+
+  @@index([owner_id, deleted_at])
+  @@index([owner_id])
+}
+
+model Unit {
+  id          String    @id @default(uuid())
+  house_id    String
+  name        String
+  floor       String?
+  bedrooms    Int       @default(1)
+  bathrooms   Int       @default(1)
+  description String?
+  created_at  DateTime  @default(now())
+  updated_at  DateTime  @updatedAt
+  deleted_at  DateTime?
+
+  house        House         @relation(fields: [house_id], references: [id])
+  leases       Lease[]
+  rent_rates   RentRate[]
+  rent_charges RentCharge[]
+  expenses     Expense[]
+  other_income OtherIncome[]
+
+  @@index([house_id, deleted_at])
+  @@index([house_id])
+}
+
+model Tenant {
+  id             String    @id @default(uuid())
+  owner_id       String
+  full_name      String
+  email          String?
+  phone          String?
+  photo_url      String?
+  // Stores either a remote URL or a base64/data URL for the tenant's ID
+  // card image. Surfaced in the read-only details sheet alongside the
+  // profile photo so the operator can verify the tenant's identity
+  // without leaving the app.
+  nid_image_url  String?
+  id_type        String?
+  id_number      String?
+  date_of_birth  DateTime?
+  notes          String?
+  created_at     DateTime  @default(now())
+  updated_at     DateTime  @updatedAt
+  deleted_at     DateTime?
+
+  leases         Lease[]
+  rent_charges   RentCharge[]
+  family_members TenantFamilyMember[]
+  attachments    Attachment[] @relation("TenantAttachments")
+
+  @@index([owner_id, deleted_at])
+  @@index([owner_id, full_name])
+  @@index([email])
+}
+
+model TenantFamilyMember {
+  id         String   @id @default(uuid())
+  tenant_id  String
+  name       String
+  relation   String
+  created_at DateTime @default(now())
+  updated_at DateTime @updatedAt
+
+  tenant Tenant @relation(fields: [tenant_id], references: [id], onDelete: Cascade)
+
+  @@index([tenant_id])
+}
+
+model Lease {
+  id               String      @id @default(uuid())
+  house_id         String
+  unit_id          String
+  tenant_id        String
+  status           LeaseStatus @default(ACTIVE)
+  start_date       DateTime
+  end_date         DateTime?
+  move_in_date     DateTime
+  move_out_date    DateTime?
+  security_deposit Decimal     @db.Decimal(14, 2) @default(0)
+  ended_reason     String?
+  notes            String?
+  created_at       DateTime    @default(now())
+  updated_at       DateTime    @updatedAt
+
+  house        House        @relation(fields: [house_id], references: [id])
+  unit         Unit         @relation(fields: [unit_id], references: [id])
+  tenant       Tenant       @relation(fields: [tenant_id], references: [id])
+  rent_charges RentCharge[]
+  attachments  Attachment[] @relation("LeaseAttachments")
+
+  @@index([unit_id, status])
+  @@index([house_id, status])
+  @@index([tenant_id])
+  @@index([status, end_date])
+  @@index([house_id, tenant_id])
+}
+
+enum LeaseStatus {
+  ACTIVE
+  ENDED
+  TERMINATED
+}
+
+model RentRate {
+  id             String    @id @default(uuid())
+  unit_id        String
+  amount         Decimal   @db.Decimal(14, 2)
+  effective_from DateTime
+  effective_to   DateTime?
+  set_by         String
+  notes          String?
+  created_at     DateTime  @default(now())
+
+  unit Unit @relation(fields: [unit_id], references: [id])
+
+  @@index([unit_id, effective_to])
+  @@index([unit_id, effective_from])
+}
+model RentCharge {
+  id          String           @id @default(uuid())
+  house_id    String
+  unit_id     String
+  lease_id    String
+  tenant_id   String
+  due_month   String
+  due_date    DateTime
+  amount_due  Decimal          @db.Decimal(14, 2)
+  status      RentChargeStatus @default(UNPAID)
+  notes       String?
+  voided_at   DateTime?
+  void_reason String?
+  created_at  DateTime         @default(now())
+  updated_at  DateTime         @updatedAt
+
+  house    House     @relation(fields: [house_id], references: [id])
+  unit     Unit      @relation(fields: [unit_id], references: [id])
+  lease    Lease     @relation(fields: [lease_id], references: [id])
+  tenant   Tenant    @relation(fields: [tenant_id], references: [id])
+  payments Payment[]
+
+  @@unique([unit_id, lease_id, due_month])
+  @@index([house_id, due_month])
+  @@index([lease_id])
+  @@index([tenant_id, due_month])
+  @@index([status, due_date])
+  @@index([house_id, status])
+}
+
+enum RentChargeStatus {
+  UNPAID
+  PARTIAL
+  PAID
+  OVERDUE
+  VOIDED
+}
+
+model Payment {
+  id              String        @id @default(uuid())
+  rent_charge_id  String
+  amount          Decimal       @db.Decimal(14, 2)
+  date_paid       DateTime
+  method          PaymentMethod
+  status          PaymentStatus @default(CONFIRMED)
+  reference_no    String?
+  idempotency_key String        @unique
+  recorded_by     String
+  notes           String?
+  void_reason     String?
+  voided_at       DateTime?
+  created_at      DateTime      @default(now())
+  updated_at      DateTime      @updatedAt
+
+  rent_charge RentCharge   @relation(fields: [rent_charge_id], references: [id])
+  attachments Attachment[] @relation("PaymentAttachments")
+
+  @@index([rent_charge_id, status])
+  @@index([date_paid])
+  @@index([status, date_paid])
+  @@index([recorded_by])
+}
+
+enum PaymentMethod {
+  CASH
+  BANK_TRANSFER
+  MOBILE_MONEY
+  CHEQUE
+  CARD
+  OTHER
+}
+
+enum PaymentStatus {
+  CONFIRMED
+  VOIDED
+  REFUNDED
+}
+
+model Expense {
+  id              String          @id @default(uuid())
+  house_id        String
+  unit_id         String?
+  category        ExpenseCategory
+  custom_category String?
+  amount          Decimal         @db.Decimal(14, 2)
+  expense_date    DateTime
+  description     String?
+  vendor          String?
+  created_by      String
+  created_at      DateTime        @default(now())
+  updated_at      DateTime        @updatedAt
+  deleted_at      DateTime?
+
+  house       House        @relation(fields: [house_id], references: [id])
+  unit        Unit?        @relation(fields: [unit_id], references: [id])
+  attachments Attachment[] @relation("ExpenseAttachments")
+
+  @@index([house_id, expense_date, deleted_at])
+  @@index([house_id, category])
+  @@index([unit_id, expense_date])
+}
+
+enum ExpenseCategory {
+  MAINTENANCE
+  UTILITIES
+  INSURANCE
+  PROPERTY_TAX
+  MANAGEMENT_FEE
+  CLEANING
+  LANDSCAPING
+  LEGAL
+  MARKETING
+  SUPPLIES
+  RENOVATION
+  OTHER
+}
+model OtherIncome {
+  id          String          @id @default(uuid())
+  house_id    String
+  unit_id     String?
+  type        OtherIncomeType
+  amount      Decimal         @db.Decimal(14, 2)
+  income_date DateTime
+  description String?
+  created_by  String
+  created_at  DateTime        @default(now())
+  updated_at  DateTime        @updatedAt
+  deleted_at  DateTime?
+
+  house       House        @relation(fields: [house_id], references: [id])
+  unit        Unit?        @relation(fields: [unit_id], references: [id])
+  attachments Attachment[] @relation("OtherIncomeAttachments")
+
+  @@index([house_id, income_date, deleted_at])
+  @@index([house_id, type])
+}
+
+enum OtherIncomeType {
+  PARKING
+  LAUNDRY
+  LATE_FEE
+  PET_FEE
+  STORAGE
+  SECURITY_DEPOSIT_FORFEITURE
+  UTILITY_REIMBURSEMENT
+  OTHER
+}
+
+model Attachment {
+  id              String    @id @default(uuid())
+  owner_type      String
+  owner_id        String
+  document_type   String?
+  file_key        String    @unique
+  file_url        String
+  file_name       String
+  mime_type       String
+  size_bytes      Int
+  uploaded_by     String
+  created_at      DateTime  @default(now())
+  deleted_at      DateTime?
+  payment_id      String?
+  expense_id      String?
+  lease_id        String?
+  other_income_id String?
+  tenant_id       String?
+
+  payment      Payment?     @relation("PaymentAttachments", fields: [payment_id], references: [id])
+  expense      Expense?     @relation("ExpenseAttachments", fields: [expense_id], references: [id])
+  lease        Lease?       @relation("LeaseAttachments", fields: [lease_id], references: [id])
+  other_income OtherIncome? @relation("OtherIncomeAttachments", fields: [other_income_id], references: [id])
+  tenant       Tenant?      @relation("TenantAttachments", fields: [tenant_id], references: [id])
+
+  @@index([owner_type, owner_id])
+  @@index([tenant_id, document_type])
+  @@index([deleted_at])
+}
+
+model AuditLog {
+  id           String      @id @default(uuid())
+  entity_type  String
+  entity_id    String
+  action       AuditAction
+  actor_id     String
+  before_state Json?
+  after_state  Json?
+  ip_address   String?
+  user_agent   String?
+  created_at   DateTime    @default(now())
+
+  actor User @relation("AuditActor", fields: [actor_id], references: [id])
+
+  @@index([entity_type, entity_id])
+  @@index([actor_id, created_at])
+  @@index([created_at])
+  @@index([action, entity_type])
+}
+
+enum AuditAction {
+  CREATE
+  UPDATE
+  DELETE
+  RESTORE
+  VOID
+  REFUND
+  MOVE_IN
+  MOVE_OUT
+  GENERATE
+  RECALCULATE
+}
+
+model ReportSnapshot {
+  id                   String     @id @default(uuid())
+  house_id             String
+  period_type          PeriodType
+  period_key           String
+  total_rent_collected Decimal    @db.Decimal(14, 2)
+  total_other_income   Decimal    @db.Decimal(14, 2)
+  total_expenses       Decimal    @db.Decimal(14, 2)
+  net_income           Decimal    @db.Decimal(14, 2)
+  occupied_units       Int
+  vacant_units         Int
+  overdue_amount       Decimal    @db.Decimal(14, 2)
+  rent_roll            Json
+  data                 Json
+  is_final             Boolean    @default(false)
+  generated_at         DateTime   @default(now())
+  updated_at           DateTime   @updatedAt
+
+  house House @relation(fields: [house_id], references: [id])
+
+  @@unique([house_id, period_type, period_key])
+  @@index([house_id, period_key])
+  @@index([is_final, period_key])
+}
+
+enum PeriodType {
+  MONTHLY
+  YEARLY
+}
+
+model RateLimitToken {
+  id         String   @id @default(uuid())
+  key        String
+  created_at DateTime @default(now())
+
+  @@index([key, created_at])
+}
