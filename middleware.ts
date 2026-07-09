@@ -12,8 +12,15 @@ import { updateSession } from "@/lib/supabase/middleware";
 //   const ALLOWED_ORIGIN = "https://app.yourdomain.com";
 export async function middleware(request: NextRequest) {
   // Refresh Supabase auth cookies before anything else so the downstream
-  // handler sees an up-to-date session.
-  let response = await updateSession(request);
+  // handler sees an up-to-date session. If Supabase isn't configured we still
+  // get a pass-through response from updateSession, but we wrap in try/catch
+  // so a stray failure never breaks the API surface.
+  let response: NextResponse;
+  try {
+    response = await updateSession(request);
+  } catch {
+    response = NextResponse.next();
+  }
 
   // Short-circuit preflight with a 204 carrying the CORS headers. Without this
   // Next.js returns 204 with no headers and the browser blocks the real call.
