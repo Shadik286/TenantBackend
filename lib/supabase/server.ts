@@ -4,10 +4,29 @@ import { cookies } from "next/headers";
 const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
 const supabaseKey = process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY;
 
+// Returns a typed stub when env vars are missing so Server Components using
+// this client can still render (e.g. the demo /api health page). The `as any`
+// is intentional: the shape matches `@supabase/supabase-js` enough for the
+// one or two calls we make, and we never call them when env is missing.
+function unconfiguredStub(): any {
+  return {
+    auth: {
+      getUser: async () => ({ data: { user: null }, error: null }),
+    },
+    from: () => ({
+      select: async () => ({ data: null, error: { message: "Supabase env not configured" } }),
+    }),
+  };
+}
+
 export const createClient = (
   cookieStore: Awaited<ReturnType<typeof cookies>>,
 ) => {
-  return createServerClient(supabaseUrl!, supabaseKey!, {
+  if (!supabaseUrl || !supabaseKey) {
+    return unconfiguredStub();
+  }
+
+  return createServerClient(supabaseUrl, supabaseKey, {
     cookies: {
       getAll() {
         return cookieStore.getAll();
