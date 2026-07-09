@@ -354,33 +354,9 @@ async function buildMonthlyReport(houseId: string, month: string) {
     reference_no: p.reference_no ?? null,
   }));
 
-  return {
-    house: { id: house.id, name: house.name },
-    period_type: "MONTHLY" as const,
-    period_key: month,
-    period_label: monthLabel(month),
-    currency: "USD",
-
-    total_rent_collected: totalRentCollected.toFixed(2),
-    total_other_income: totalOtherIncome.toFixed(2),
-    total_expenses: totalExpenses.toFixed(2),
-    net_income: netIncome.toFixed(2),
-    overdue_amount: overdueAmount.toFixed(2),
-    occupied_units: occupiedUnits,
-    vacant_units: vacantUnits,
-    payments_count: payments.length,
-    expenses_count: expenses.length,
-    other_income_count: otherIncomeAgg._count._all ?? 0,
-
-    rent_roll: rentRoll,
-    expense_detail: expenseDetail,
-    payment_detail: paymentDetail,
-  };
-
-  // Fire-and-await UPSERT into ReportSnapshot so the next request for this
-  // (house, MONTHLY, month) is a single indexed point-lookup instead of a
-  // full 5-way join. We store the raw JSONB the GET handler would otherwise
-  // send over the wire so the cache hit path is zero-copy. The unique
+  // Single source of truth for the response shape — also persisted into
+  // ReportSnapshot so the next request for this (house, MONTHLY, month) is
+  // a single indexed point-lookup instead of a full 5-way join. The unique
   // constraint on (house_id, period_type, period_key) guarantees a single
   // row per period, so this is the correct shape.
   const report = {
@@ -406,6 +382,8 @@ async function buildMonthlyReport(houseId: string, month: string) {
     payment_detail: paymentDetail,
   };
 
+  // Best-effort cache write — a failed UPSERT must never break the live
+  // request, so swallow any error and log it.
   try {
     await prisma.reportSnapshot.upsert({
       where: {
@@ -778,35 +756,6 @@ async function buildYearlyReport(houseId: string, year: string) {
   const occupiedUnits = units.filter((u) => u.leases.length > 0).length;
   const vacantUnits = units.length - occupiedUnits;
 
-  return {
-    house: { id: house.id, name: house.name },
-    period_type: "YEARLY" as const,
-    period_key: year,
-    period_label: year,
-    currency: "USD",
-
-    total_rent_collected: totalRentCollected.toFixed(2),
-    total_other_income: totalOtherIncome.toFixed(2),
-    total_expenses: totalExpenses.toFixed(2),
-    net_income: netIncome.toFixed(2),
-    overdue_amount: overdueAmount.toFixed(2),
-    occupied_units: occupiedUnits,
-    vacant_units: vacantUnits,
-    payments_count: payments.length,
-    expenses_count: expenses.length,
-    other_income_count: otherIncomeAgg._count._all ?? 0,
-
-    monthly_breakdown: monthlyBreakdown,
-    rent_by_unit: rentByUnit,
-    expense_summary: expenseSummary,
-    expense_cells: expenseCells,
-    category_columns: categoryColumns,
-    expense_total_by_month: expenseTotalByMonth,
-  };
-
-  // Persist to ReportSnapshot so the next request for this year is a
-  // single indexed point-lookup. Best-effort: a failed cache write must
-  // never break the live request.
   const report = {
     house: { id: house.id, name: house.name },
     period_type: "YEARLY" as const,
