@@ -75,6 +75,13 @@ export async function GET(request: NextRequest) {
   const month = sp.get("month"); // YYYY-MM
   const category = sp.get("category");
 
+  // Cap at 200 rows. Finances tab never needs more; prevents accidental
+  // full-table scans from making the page slow to render.
+  const take = Math.min(
+    Math.max(Number(sp.get("take")) || 200, 1),
+    500,
+  );
+
   const expenses = await prisma.expense.findMany({
     where: {
       deleted_at: null,
@@ -98,7 +105,24 @@ export async function GET(request: NextRequest) {
       ...(category ? { category: category as any } : {}),
     },
     orderBy: { expense_date: "desc" },
-    include: { unit: true },
+    take,
+    // Explicit `select` instead of `include` so we skip the `notes`
+    // blob (rarely populated) and only ship the columns the UI shows.
+    select: {
+      id: true,
+      house_id: true,
+      unit_id: true,
+      category: true,
+      custom_category: true,
+      amount: true,
+      expense_date: true,
+      description: true,
+      vendor: true,
+      created_by: true,
+      created_at: true,
+      updated_at: true,
+      unit: { select: { id: true, name: true } },
+    },
   });
 
   let total = new Prisma.Decimal(0);

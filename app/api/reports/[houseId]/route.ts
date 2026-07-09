@@ -191,6 +191,27 @@ async function buildMonthlyReport(houseId: string, month: string) {
     throw new Error(`House ${houseId} not found while building monthly report.`);
   }
 
+  // Cache lookup: a finalized snapshot for this (house, period, key) is
+  // identical to a fresh compute, so serve it straight from JSONB instead
+  // of running the full 5-way join. The schema has
+  // `@@unique([house_id, period_type, period_key])` on `ReportSnapshot`,
+  // so this is a single indexed point-lookup. We always compute fresh
+  // when no final snapshot exists, then UPSERT it so the next request
+  // is a one-row read.
+  const cached = await prisma.reportSnapshot.findUnique({
+    where: {
+      house_id_period_type_period_key: {
+        house_id: houseId,
+        period_type: "MONTHLY",
+        period_key: month,
+      },
+    },
+    select: { data: true, is_final: true },
+  });
+  if (cached?.is_final) {
+    return cached.data as any;
+  }
+
   const [
     charges,
     expenses,
@@ -355,6 +376,80 @@ async function buildMonthlyReport(houseId: string, month: string) {
     expense_detail: expenseDetail,
     payment_detail: paymentDetail,
   };
+
+  // Fire-and-await UPSERT into ReportSnapshot so the next request for this
+  // (house, MONTHLY, month) is a single indexed point-lookup instead of a
+  // full 5-way join. We store the raw JSONB the GET handler would otherwise
+  // send over the wire so the cache hit path is zero-copy. The unique
+  // constraint on (house_id, period_type, period_key) guarantees a single
+  // row per period, so this is the correct shape.
+  const report = {
+    house: { id: house.id, name: house.name },
+    period_type: "MONTHLY" as const,
+    period_key: month,
+    period_label: monthLabel(month),
+    currency: "USD",
+
+    total_rent_collected: totalRentCollected.toFixed(2),
+    total_other_income: totalOtherIncome.toFixed(2),
+    total_expenses: totalExpenses.toFixed(2),
+    net_income: netIncome.toFixed(2),
+    overdue_amount: overdueAmount.toFixed(2),
+    occupied_units: occupiedUnits,
+    vacant_units: vacantUnits,
+    payments_count: payments.length,
+    expenses_count: expenses.length,
+    other_income_count: otherIncomeAgg._count._all ?? 0,
+
+    rent_roll: rentRoll,
+    expense_detail: expenseDetail,
+    payment_detail: paymentDetail,
+  };
+
+  try {
+    await prisma.reportSnapshot.upsert({
+      where: {
+        house_id_period_type_period_key: {
+          house_id: houseId,
+          period_type: "MONTHLY",
+          period_key: month,
+        },
+      },
+      create: {
+        house_id: houseId,
+        period_type: "MONTHLY",
+        period_key: month,
+        total_rent_collected: new Prisma.Decimal(report.total_rent_collected),
+        total_other_income: new Prisma.Decimal(report.total_other_income),
+        total_expenses: new Prisma.Decimal(report.total_expenses),
+        net_income: new Prisma.Decimal(report.net_income),
+        occupied_units: report.occupied_units,
+        vacant_units: report.vacant_units,
+        overdue_amount: new Prisma.Decimal(report.overdue_amount),
+        rent_roll: report.rent_roll as any,
+        data: report as any,
+        is_final: true,
+      },
+      update: {
+        total_rent_collected: new Prisma.Decimal(report.total_rent_collected),
+        total_other_income: new Prisma.Decimal(report.total_other_income),
+        total_expenses: new Prisma.Decimal(report.total_expenses),
+        net_income: new Prisma.Decimal(report.net_income),
+        occupied_units: report.occupied_units,
+        vacant_units: report.vacant_units,
+        overdue_amount: new Prisma.Decimal(report.overdue_amount),
+        rent_roll: report.rent_roll as any,
+        data: report as any,
+        is_final: true,
+        updated_at: new Date(),
+      },
+    });
+  } catch {
+    // Snapshot write is best-effort — never fail the request because the
+    // cache layer hiccuped; the next request will simply recompute.
+  }
+
+  return report;
 }
 
 /* -------------------------------------------------------------------------- */
@@ -370,6 +465,23 @@ async function buildYearlyReport(houseId: string, year: string) {
   });
   if (!house) {
     throw new Error(`House ${houseId} not found while building yearly report.`);
+  }
+
+  // Cache lookup: same pattern as the monthly report. A finalised
+  // ReportSnapshot row for (house, YEARLY, year) means the full
+  // aggregation has been done before and we can serve it as-is.
+  const cached = await prisma.reportSnapshot.findUnique({
+    where: {
+      house_id_period_type_period_key: {
+        house_id: houseId,
+        period_type: "YEARLY",
+        period_key: year,
+      },
+    },
+    select: { data: true, is_final: true },
+  });
+  if (cached?.is_final) {
+    return cached.data as any;
   }
 
   const [
@@ -691,4 +803,77 @@ async function buildYearlyReport(houseId: string, year: string) {
     category_columns: categoryColumns,
     expense_total_by_month: expenseTotalByMonth,
   };
+
+  // Persist to ReportSnapshot so the next request for this year is a
+  // single indexed point-lookup. Best-effort: a failed cache write must
+  // never break the live request.
+  const report = {
+    house: { id: house.id, name: house.name },
+    period_type: "YEARLY" as const,
+    period_key: year,
+    period_label: year,
+    currency: "USD",
+
+    total_rent_collected: totalRentCollected.toFixed(2),
+    total_other_income: totalOtherIncome.toFixed(2),
+    total_expenses: totalExpenses.toFixed(2),
+    net_income: netIncome.toFixed(2),
+    overdue_amount: overdueAmount.toFixed(2),
+    occupied_units: occupiedUnits,
+    vacant_units: vacantUnits,
+    payments_count: payments.length,
+    expenses_count: expenses.length,
+    other_income_count: otherIncomeAgg._count._all ?? 0,
+
+    monthly_breakdown: monthlyBreakdown,
+    rent_by_unit: rentByUnit,
+    expense_summary: expenseSummary,
+    expense_cells: expenseCells,
+    category_columns: categoryColumns,
+    expense_total_by_month: expenseTotalByMonth,
+  };
+
+  try {
+    await prisma.reportSnapshot.upsert({
+      where: {
+        house_id_period_type_period_key: {
+          house_id: houseId,
+          period_type: "YEARLY",
+          period_key: year,
+        },
+      },
+      create: {
+        house_id: houseId,
+        period_type: "YEARLY",
+        period_key: year,
+        total_rent_collected: new Prisma.Decimal(report.total_rent_collected),
+        total_other_income: new Prisma.Decimal(report.total_other_income),
+        total_expenses: new Prisma.Decimal(report.total_expenses),
+        net_income: new Prisma.Decimal(report.net_income),
+        occupied_units: report.occupied_units,
+        vacant_units: report.vacant_units,
+        overdue_amount: new Prisma.Decimal(report.overdue_amount),
+        rent_roll: [],
+        data: report as any,
+        is_final: true,
+      },
+      update: {
+        total_rent_collected: new Prisma.Decimal(report.total_rent_collected),
+        total_other_income: new Prisma.Decimal(report.total_other_income),
+        total_expenses: new Prisma.Decimal(report.total_expenses),
+        net_income: new Prisma.Decimal(report.net_income),
+        occupied_units: report.occupied_units,
+        vacant_units: report.vacant_units,
+        overdue_amount: new Prisma.Decimal(report.overdue_amount),
+        data: report as any,
+        is_final: true,
+        updated_at: new Date(),
+      },
+    });
+  } catch {
+    // Cache write is best-effort; never fail the request because the
+    // snapshot layer hiccuped.
+  }
+
+  return report;
 }

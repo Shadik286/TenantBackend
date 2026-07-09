@@ -8,13 +8,17 @@ const UNLIMITED_PLAN_MARKER = 2_147_483_647;
 
 // Fetches the caller's active plan limits. Returns null if no subscription is
 // attached (treat the account as FREE with the default 2-house limit).
+// Runs the subscription lookup AND the FREE-plan fallback lookup in
+// parallel so a missing subscription doesn't cost an extra round trip.
 async function getPlanForOwner(ownerId: string) {
-  const subscription = await prisma.subscription.findUnique({
-    where: { user_id: ownerId },
-    include: { plan: true },
-  });
+  const [subscription, freePlan] = await Promise.all([
+    prisma.subscription.findUnique({
+      where: { user_id: ownerId },
+      include: { plan: true },
+    }),
+    prisma.plan.findUnique({ where: { name: "FREE" } }),
+  ]);
   if (!subscription) {
-    const freePlan = await prisma.plan.findUnique({ where: { name: "FREE" } });
     return freePlan
       ? { plan: freePlan, status: "ACTIVE" as const }
       : null;
@@ -31,6 +35,18 @@ export async function GET(request: NextRequest) {
     prisma.house.findMany({
       where: { owner_id: ownerId, deleted_at: null },
       orderBy: { created_at: "desc" },
+      // Explicit `select` so we don't ship the (often-empty) `description`
+      // blob and the soft-delete bookkeeping column over the wire.
+      select: {
+        id: true,
+        name: true,
+        address: true,
+        city: true,
+        country: true,
+        description: true,
+        created_at: true,
+        updated_at: true,
+      },
     }),
     getPlanForOwner(ownerId),
   ]);

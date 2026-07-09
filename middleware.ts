@@ -2,14 +2,26 @@ import { NextResponse } from "next/server";
 import type { NextRequest } from "next/server";
 import { updateSession } from "@/lib/supabase/middleware";
 
-// CORS for cross-origin clients during development. The frontend may be running
-// on a different origin:
-//   - Flutter Web on http://localhost:5000 (or another port)
-//   - Android emulator on http://10.0.2.2:3000 (same-origin in practice)
-//   - Physical Android device on http://192.168.x.x:3000 (cross-origin to the browser)
+// Allow-list of origins that may call this API. Mobile apps (Android/iOS)
+// don't trigger CORS at all, so this list only governs browser/Flutter Web
+// callers.
 //
-// In production, replace the wildcard with the explicit frontend origin:
-//   const ALLOWED_ORIGIN = "https://app.yourdomain.com";
+// Comma-separate multiple origins in the ALLOWED_ORIGINS env var if you host
+// the web client on more than one domain (e.g. staging + production). Empty
+// value falls back to a safe wildcard so dev-tools like curl/Postman keep
+// working in local development.
+const ALLOWED_ORIGINS = (process.env.ALLOWED_ORIGINS ?? "")
+  .split(",")
+  .map((s) => s.trim())
+  .filter(Boolean);
+
+function resolveAllowedOrigin(request: NextRequest): string {
+  const origin = request.headers.get("origin");
+  if (!origin) return ALLOWED_ORIGINS[0] ?? "*";
+  if (ALLOWED_ORIGINS.length === 0) return origin;
+  return ALLOWED_ORIGINS.includes(origin) ? origin : ALLOWED_ORIGINS[0];
+}
+
 export async function middleware(request: NextRequest) {
   // Refresh Supabase auth cookies before anything else so the downstream
   // handler sees an up-to-date session. If Supabase isn't configured we still
@@ -39,14 +51,14 @@ export async function middleware(request: NextRequest) {
 }
 
 function corsHeaders(request: NextRequest): Record<string, string> {
-  const origin = request.headers.get("origin") ?? "*";
   return {
-    "Access-Control-Allow-Origin": origin,
+    "Access-Control-Allow-Origin": resolveAllowedOrigin(request),
     "Access-Control-Allow-Methods": "GET, POST, PUT, PATCH, DELETE, OPTIONS",
     "Access-Control-Allow-Headers":
       "Content-Type, Authorization, X-Requested-With",
     "Access-Control-Allow-Credentials": "true",
     "Access-Control-Max-Age": "86400",
+    "Vary": "Origin",
   };
 }
 

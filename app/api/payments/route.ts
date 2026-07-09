@@ -118,6 +118,14 @@ export async function GET(request: NextRequest) {
   const houseId = sp.get("houseId");
   const month = sp.get("month"); // YYYY-MM
 
+  // Cap at 200 rows. The Finances tab never renders more than a few
+  // dozen at a time, so 200 is a generous safety net that keeps the
+  // JSON payload under ~100 KB. Clients that need more can paginate.
+  const take = Math.min(
+    Math.max(Number(sp.get("take")) || 200, 1),
+    500,
+  );
+
   const payments = await prisma.payment.findMany({
     where: {
       status: { in: ["CONFIRMED", "VOIDED"] },
@@ -131,9 +139,37 @@ export async function GET(request: NextRequest) {
       },
     },
     orderBy: { date_paid: "desc" },
-    include: {
+    take,
+    // Explicit `select` instead of `include` so we don't ship the
+    // unused `house` row (the calling code only reads unit/tenant
+    // names from the charge) and we don't fetch internal `unit.notes`
+    // or other heavy columns.
+    select: {
+      id: true,
+      rent_charge_id: true,
+      amount: true,
+      date_paid: true,
+      method: true,
+      status: true,
+      reference_no: true,
+      notes: true,
+      void_reason: true,
+      voided_at: true,
+      idempotency_key: true,
+      recorded_by: true,
+      created_at: true,
+      updated_at: true,
       rent_charge: {
-        include: { unit: true, tenant: true, house: true },
+        select: {
+          due_month: true,
+          due_date: true,
+          amount_due: true,
+          unit_id: true,
+          house_id: true,
+          tenant_id: true,
+          unit: { select: { id: true, name: true } },
+          tenant: { select: { id: true, full_name: true } },
+        },
       },
     },
   });

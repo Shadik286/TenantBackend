@@ -66,6 +66,15 @@ export async function GET(request: NextRequest) {
 
   const houseId = request.nextUrl.searchParams.get("houseId");
 
+  // Cap the list at 200 rows so a runaway account can't slow the page to
+  // a crawl by paginating the whole database. The Flutter UI shows at
+  // most a few dozen at a time; 200 is a generous safety net. Clients
+  // that need pagination should add `take`/`skip` later.
+  const take = Math.min(
+    Math.max(Number(request.nextUrl.searchParams.get("take")) || 200, 1),
+    500,
+  );
+
   const tenants = await prisma.tenant.findMany({
     where: {
       owner_id: ownerId,
@@ -78,13 +87,44 @@ export async function GET(request: NextRequest) {
         : {}),
     },
     orderBy: { created_at: "desc" },
-    include: {
+    take,
+    // Explicit `select` instead of `include` so Prisma only ships the
+    // columns Flutter actually uses. We skip the `description` blob
+    // (rarely used on list screens) and the soft-delete bookkeeping
+    // columns; everything else the list needs is here.
+    select: {
+      id: true,
+      full_name: true,
+      email: true,
+      phone: true,
+      notes: true,
+      photo_url: true,
+      nid_image_url: true,
+      id_type: true,
+      id_number: true,
+      date_of_birth: true,
+      created_at: true,
+      updated_at: true,
       leases: {
         orderBy: { created_at: "desc" },
         take: 1,
-        include: { unit: true },
+        select: {
+          id: true,
+          status: true,
+          start_date: true,
+          end_date: true,
+          move_in_date: true,
+          move_out_date: true,
+          security_deposit: true,
+          unit_id: true,
+          house_id: true,
+          unit: { select: { id: true, name: true } },
+        },
       },
-      family_members: { orderBy: { created_at: "asc" } },
+      family_members: {
+        orderBy: { created_at: "asc" },
+        select: { id: true, name: true, relation: true },
+      },
     },
   });
 
