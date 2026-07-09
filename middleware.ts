@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import type { NextRequest } from "next/server";
+import { updateSession } from "@/lib/supabase/middleware";
 
 // CORS for cross-origin clients during development. The frontend may be running
 // on a different origin:
@@ -9,10 +10,11 @@ import type { NextRequest } from "next/server";
 //
 // In production, replace the wildcard with the explicit frontend origin:
 //   const ALLOWED_ORIGIN = "https://app.yourdomain.com";
-//
-// The headers below are echoed on EVERY response that flows through the
-// matcher, including the OPTIONS preflight and the actual POST/PATCH/DELETE.
-export function middleware(request: NextRequest) {
+export async function middleware(request: NextRequest) {
+  // Refresh Supabase auth cookies before anything else so the downstream
+  // handler sees an up-to-date session.
+  let response = await updateSession(request);
+
   // Short-circuit preflight with a 204 carrying the CORS headers. Without this
   // Next.js returns 204 with no headers and the browser blocks the real call.
   if (request.method === "OPTIONS") {
@@ -22,7 +24,6 @@ export function middleware(request: NextRequest) {
     });
   }
 
-  const response = NextResponse.next();
   const headers = corsHeaders(request);
   for (const [key, value] of Object.entries(headers)) {
     response.headers.set(key, value);
@@ -35,13 +36,15 @@ function corsHeaders(request: NextRequest): Record<string, string> {
   return {
     "Access-Control-Allow-Origin": origin,
     "Access-Control-Allow-Methods": "GET, POST, PUT, PATCH, DELETE, OPTIONS",
-    "Access-Control-Allow-Headers": "Content-Type, Authorization, X-Requested-With",
+    "Access-Control-Allow-Headers":
+      "Content-Type, Authorization, X-Requested-With",
     "Access-Control-Allow-Credentials": "true",
     "Access-Control-Max-Age": "86400",
   };
 }
 
 export const config = {
-  // Apply only to API routes so we don't decorate static assets with CORS.
-  matcher: "/api/:path*",
+  // Run on API routes (CORS) and any non-static path so Supabase can refresh
+  // sessions on page navigations.
+  matcher: ["/api/:path*", "/((?!_next/static|_next/image|favicon.ico).*)"],
 };
