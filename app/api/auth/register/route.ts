@@ -4,6 +4,11 @@ import { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
 
 export const runtime = "nodejs";
+export const dynamic = "force-dynamic";
+
+// Probe-grade diagnostics: any uncaught module-load or handler error is  
+// surfaced in the JSON body so smoke tests stop seeing empty 500s from    
+// Vercel's edge before our code runs.
 
 // Default FREE-plan settings applied at registration time. These match the
 // values inserted by `prisma/seed.ts` and are used only as a safety net if
@@ -17,6 +22,21 @@ function normalizePhone(input: string): string {
 }
 
 export async function POST(request: Request) {
+  try {
+    return await handleRegister(request);
+  } catch (err) {
+    const message =
+      err instanceof Error ? `${err.name}: ${err.message}` : String(err);
+    // eslint-disable-next-line no-console
+    console.error("[register] uncaught:", message);
+    return NextResponse.json(
+      { error: "Unhandled register error.", message },
+      { status: 500 }
+    );
+  }
+}
+
+async function handleRegister(request: Request) {
   const body = await request.json();
   const { email, password, fullName, phone } = body as {
     email?: string;
