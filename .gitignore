@@ -3,3 +3,5 @@ node_modules
 .env
 .env.local
 .env.*.local
+# Allow committed example files
+!env.example
