@@ -1,0 +1,9 @@
+email: testing1@gmail.com
+password: "testing1@gmail.com"
+user.id: 340d592c-a4de-4b61-ba7f-d1127565ddca
+user.email: testing1@gmail.com
+hash.starts_with: $2b$10$QVz
+hash.length: 60
+bcrypt.compare(live): true
+fresh.starts_with: $2b$10$hME
+fresh.equals(stored): false

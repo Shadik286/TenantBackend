@@ -1,0 +1,252 @@
+ ⨯ [Error: Cannot find module './vendor-chunks/jose.js'
+Require stack:
+- E:\Tenant\TenantManagementBackend\.next\server\webpack-runtime.js
+- E:\Tenant\TenantManagementBackend\.next\server\app\api\reports\[houseId]\route.js
+- E:\Tenant\TenantManagementBackend\node_modules\next\dist\server\require.js
+- E:\Tenant\TenantManagementBackend\node_modules\next\dist\server\load-components.js
+- E:\Tenant\TenantManagementBackend\node_modules\next\dist\build\utils.js
+- E:\Tenant\TenantManagementBackend\node_modules\next\dist\server\dev\static-paths-worker.js
+- E:\Tenant\TenantManagementBackend\node_modules\next\dist\compiled\jest-worker\processChild.js] {
+  type: 'Error',
+  code: 'MODULE_NOT_FOUND',
+  requireStack: [Array],
+  page: '/api/reports/b47987d6-adf2-436b-9790-7309be1fa202'
+}
+ ⨯ [Error: Cannot find module './vendor-chunks/jose.js'
+Require stack:
+- E:\Tenant\TenantManagementBackend\.next\server\webpack-runtime.js
+- E:\Tenant\TenantManagementBackend\.next\server\app\api\reports\[houseId]\route.js
+- E:\Tenant\TenantManagementBackend\node_modules\next\dist\server\require.js
+- E:\Tenant\TenantManagementBackend\node_modules\next\dist\server\load-components.js
+- E:\Tenant\TenantManagementBackend\node_modules\next\dist\build\utils.js
+- E:\Tenant\TenantManagementBackend\node_modules\next\dist\server\dev\static-paths-worker.js
+- E:\Tenant\TenantManagementBackend\node_modules\next\dist\compiled\jest-worker\processChild.js] {
+  type: 'Error',
+  code: 'MODULE_NOT_FOUND',
+  requireStack: [Array],
+  page: '/api/reports/b47987d6-adf2-436b-9790-7309be1fa202'
+}
+ ⨯ [Error: Cannot find module './vendor-chunks/jose.js'
+Require stack:
+- E:\Tenant\TenantManagementBackend\.next\server\webpack-runtime.js
+- E:\Tenant\TenantManagementBackend\.next\server\app\api\reports\[houseId]\route.js
+- E:\Tenant\TenantManagementBackend\node_modules\next\dist\server\require.js
+- E:\Tenant\TenantManagementBackend\node_modules\next\dist\server\load-components.js
+- E:\Tenant\TenantManagementBackend\node_modules\next\dist\build\utils.js
+- E:\Tenant\TenantManagementBackend\node_modules\next\dist\server\dev\static-paths-worker.js
+- E:\Tenant\TenantManagementBackend\node_modules\next\dist\compiled\jest-worker\processChild.js] {
+  type: 'Error',
+  code: 'MODULE_NOT_FOUND',
+  requireStack: [Array],
+  page: '/api/reports/b47987d6-adf2-436b-9790-7309be1fa202'
+}
+ ⨯ [Error: Cannot find module './vendor-chunks/jose.js'
+Require stack:
+- E:\Tenant\TenantManagementBackend\.next\server\webpack-runtime.js
+- E:\Tenant\TenantManagementBackend\.next\server\app\api\reports\[houseId]\route.js
+- E:\Tenant\TenantManagementBackend\node_modules\next\dist\server\require.js
+- E:\Tenant\TenantManagementBackend\node_modules\next\dist\server\load-components.js
+- E:\Tenant\TenantManagementBackend\node_modules\next\dist\build\utils.js
+- E:\Tenant\TenantManagementBackend\node_modules\next\dist\server\dev\static-paths-worker.js
+- E:\Tenant\TenantManagementBackend\node_modules\next\dist\compiled\jest-worker\processChild.js] {
+  type: 'Error',
+  code: 'MODULE_NOT_FOUND',
+  requireStack: [Array],
+  page: '/api/reports/b47987d6-adf2-436b-9790-7309be1fa202'
+}
+ ⨯ [Error: Cannot find module './vendor-chunks/jose.js'
+Require stack:
+- E:\Tenant\TenantManagementBackend\.next\server\webpack-runtime.js
+- E:\Tenant\TenantManagementBackend\.next\server\app\api\reports\[houseId]\route.js
+- E:\Tenant\TenantManagementBackend\node_modules\next\dist\server\require.js
+- E:\Tenant\TenantManagementBackend\node_modules\next\dist\server\load-components.js
+- E:\Tenant\TenantManagementBackend\node_modules\next\dist\build\utils.js
+- E:\Tenant\TenantManagementBackend\node_modules\next\dist\server\dev\static-paths-worker.js
+- E:\Tenant\TenantManagementBackend\node_modules\next\dist\compiled\jest-worker\processChild.js] {
+  type: 'Error',
+  code: 'MODULE_NOT_FOUND',
+  requireStack: [Array],
+  page: '/api/reports/b47987d6-adf2-436b-9790-7309be1fa202'
+}
+ ⨯ [Error: Cannot find module './vendor-chunks/jose.js'
+Require stack:
+- E:\Tenant\TenantManagementBackend\.next\server\webpack-runtime.js
+- E:\Tenant\TenantManagementBackend\.next\server\app\api\reports\[houseId]\route.js
+- E:\Tenant\TenantManagementBackend\node_modules\next\dist\server\require.js
+- E:\Tenant\TenantManagementBackend\node_modules\next\dist\server\load-components.js
+- E:\Tenant\TenantManagementBackend\node_modules\next\dist\build\utils.js
+- E:\Tenant\TenantManagementBackend\node_modules\next\dist\server\dev\static-paths-worker.js
+- E:\Tenant\TenantManagementBackend\node_modules\next\dist\compiled\jest-worker\processChild.js] {
+  type: 'Error',
+  code: 'MODULE_NOT_FOUND',
+  requireStack: [Array],
+  page: '/api/reports/b47987d6-adf2-436b-9790-7309be1fa202'
+}
+ ⨯ [Error: Cannot find module './vendor-chunks/jose.js'
+Require stack:
+- E:\Tenant\TenantManagementBackend\.next\server\webpack-runtime.js
+- E:\Tenant\TenantManagementBackend\.next\server\app\api\reports\[houseId]\route.js
+- E:\Tenant\TenantManagementBackend\node_modules\next\dist\server\require.js
+- E:\Tenant\TenantManagementBackend\node_modules\next\dist\server\load-components.js
+- E:\Tenant\TenantManagementBackend\node_modules\next\dist\build\utils.js
+- E:\Tenant\TenantManagementBackend\node_modules\next\dist\server\dev\static-paths-worker.js
+- E:\Tenant\TenantManagementBackend\node_modules\next\dist\compiled\jest-worker\processChild.js] {
+  type: 'Error',
+  code: 'MODULE_NOT_FOUND',
+  requireStack: [Array],
+  page: '/api/reports/b47987d6-adf2-436b-9790-7309be1fa202'
+}
+ ⨯ [Error: Cannot find module './vendor-chunks/jose.js'
+Require stack:
+- E:\Tenant\TenantManagementBackend\.next\server\webpack-runtime.js
+- E:\Tenant\TenantManagementBackend\.next\server\app\api\reports\[houseId]\route.js
+- E:\Tenant\TenantManagementBackend\node_modules\next\dist\server\require.js
+- E:\Tenant\TenantManagementBackend\node_modules\next\dist\server\load-components.js
+- E:\Tenant\TenantManagementBackend\node_modules\next\dist\build\utils.js
+- E:\Tenant\TenantManagementBackend\node_modules\next\dist\server\dev\static-paths-worker.js
+- E:\Tenant\TenantManagementBackend\node_modules\next\dist\compiled\jest-worker\processChild.js] {
+  type: 'Error',
+  code: 'MODULE_NOT_FOUND',
+  requireStack: [Array],
+  page: '/api/reports/b47987d6-adf2-436b-9790-7309be1fa202'
+}
+ ⨯ [Error: Cannot find module './vendor-chunks/jose.js'
+Require stack:
+- E:\Tenant\TenantManagementBackend\.next\server\webpack-runtime.js
+- E:\Tenant\TenantManagementBackend\.next\server\app\api\reports\[houseId]\route.js
+- E:\Tenant\TenantManagementBackend\node_modules\next\dist\server\require.js
+- E:\Tenant\TenantManagementBackend\node_modules\next\dist\server\load-components.js
+- E:\Tenant\TenantManagementBackend\node_modules\next\dist\build\utils.js
+- E:\Tenant\TenantManagementBackend\node_modules\next\dist\server\dev\static-paths-worker.js
+- E:\Tenant\TenantManagementBackend\node_modules\next\dist\compiled\jest-worker\processChild.js] {
+  type: 'Error',
+  code: 'MODULE_NOT_FOUND',
+  requireStack: [Array],
+  page: '/api/reports/b47987d6-adf2-436b-9790-7309be1fa202'
+}
+ ⨯ [Error: Cannot find module './vendor-chunks/jose.js'
+Require stack:
+- E:\Tenant\TenantManagementBackend\.next\server\webpack-runtime.js
+- E:\Tenant\TenantManagementBackend\.next\server\app\api\payments\[paymentId]\route.js
+- E:\Tenant\TenantManagementBackend\node_modules\next\dist\server\require.js
+- E:\Tenant\TenantManagementBackend\node_modules\next\dist\server\load-components.js
+- E:\Tenant\TenantManagementBackend\node_modules\next\dist\build\utils.js
+- E:\Tenant\TenantManagementBackend\node_modules\next\dist\server\dev\static-paths-worker.js
+- E:\Tenant\TenantManagementBackend\node_modules\next\dist\compiled\jest-worker\processChild.js] {
+  type: 'Error',
+  code: 'MODULE_NOT_FOUND',
+  requireStack: [Array],
+  page: '/api/payments/e5a2d0fa-cb28-4f4b-8998-88ef35e17f0d'
+}
+ ⨯ [Error: Cannot find module './vendor-chunks/jose.js'
+Require stack:
+- E:\Tenant\TenantManagementBackend\.next\server\webpack-runtime.js
+- E:\Tenant\TenantManagementBackend\.next\server\app\api\payments\[paymentId]\route.js
+- E:\Tenant\TenantManagementBackend\node_modules\next\dist\server\require.js
+- E:\Tenant\TenantManagementBackend\node_modules\next\dist\server\load-components.js
+- E:\Tenant\TenantManagementBackend\node_modules\next\dist\build\utils.js
+- E:\Tenant\TenantManagementBackend\node_modules\next\dist\server\dev\static-paths-worker.js
+- E:\Tenant\TenantManagementBackend\node_modules\next\dist\compiled\jest-worker\processChild.js] {
+  type: 'Error',
+  code: 'MODULE_NOT_FOUND',
+  requireStack: [Array],
+  page: '/api/payments/e5a2d0fa-cb28-4f4b-8998-88ef35e17f0d'
+}
+ ⨯ [Error: Cannot find module './vendor-chunks/jose.js'
+Require stack:
+- E:\Tenant\TenantManagementBackend\.next\server\webpack-runtime.js
+- E:\Tenant\TenantManagementBackend\.next\server\app\api\reports\[houseId]\route.js
+- E:\Tenant\TenantManagementBackend\node_modules\next\dist\server\require.js
+- E:\Tenant\TenantManagementBackend\node_modules\next\dist\server\load-components.js
+- E:\Tenant\TenantManagementBackend\node_modules\next\dist\build\utils.js
+- E:\Tenant\TenantManagementBackend\node_modules\next\dist\server\dev\static-paths-worker.js
+- E:\Tenant\TenantManagementBackend\node_modules\next\dist\compiled\jest-worker\processChild.js] {
+  type: 'Error',
+  code: 'MODULE_NOT_FOUND',
+  requireStack: [Array],
+  page: '/api/reports/=monthly&month=2026-07'
+}
+ ⨯ [Error: Cannot find module './vendor-chunks/jose.js'
+Require stack:
+- E:\Tenant\TenantManagementBackend\.next\server\webpack-runtime.js
+- E:\Tenant\TenantManagementBackend\.next\server\app\api\reports\[houseId]\route.js
+- E:\Tenant\TenantManagementBackend\node_modules\next\dist\server\require.js
+- E:\Tenant\TenantManagementBackend\node_modules\next\dist\server\load-components.js
+- E:\Tenant\TenantManagementBackend\node_modules\next\dist\build\utils.js
+- E:\Tenant\TenantManagementBackend\node_modules\next\dist\server\dev\static-paths-worker.js
+- E:\Tenant\TenantManagementBackend\node_modules\next\dist\compiled\jest-worker\processChild.js] {
+  type: 'Error',
+  code: 'MODULE_NOT_FOUND',
+  requireStack: [Array],
+  page: '/api/reports/b47987d6-adf2-436b-9790-7309be1fa202'
+}
+ ⨯ [Error: Cannot find module './vendor-chunks/jose.js'
+Require stack:
+- E:\Tenant\TenantManagementBackend\.next\server\webpack-runtime.js
+- E:\Tenant\TenantManagementBackend\.next\server\app\api\houses\[houseId]\units\route.js
+- E:\Tenant\TenantManagementBackend\node_modules\next\dist\server\require.js
+- E:\Tenant\TenantManagementBackend\node_modules\next\dist\server\load-components.js
+- E:\Tenant\TenantManagementBackend\node_modules\next\dist\build\utils.js
+- E:\Tenant\TenantManagementBackend\node_modules\next\dist\server\dev\static-paths-worker.js
+- E:\Tenant\TenantManagementBackend\node_modules\next\dist\compiled\jest-worker\processChild.js] {
+  type: 'Error',
+  code: 'MODULE_NOT_FOUND',
+  requireStack: [Array],
+  page: '/api/houses/b47987d6-adf2-436b-9790-7309be1fa202/units'
+}
+ ⨯ [Error: Cannot find module './vendor-chunks/jose.js'
+Require stack:
+- E:\Tenant\TenantManagementBackend\.next\server\webpack-runtime.js
+- E:\Tenant\TenantManagementBackend\.next\server\app\api\houses\[houseId]\units\route.js
+- E:\Tenant\TenantManagementBackend\node_modules\next\dist\server\require.js
+- E:\Tenant\TenantManagementBackend\node_modules\next\dist\server\load-components.js
+- E:\Tenant\TenantManagementBackend\node_modules\next\dist\build\utils.js
+- E:\Tenant\TenantManagementBackend\node_modules\next\dist\server\dev\static-paths-worker.js
+- E:\Tenant\TenantManagementBackend\node_modules\next\dist\compiled\jest-worker\processChild.js] {
+  type: 'Error',
+  code: 'MODULE_NOT_FOUND',
+  requireStack: [Array],
+  page: '/api/houses/b47987d6-adf2-436b-9790-7309be1fa202/units'
+}
+ ⨯ [Error: Cannot find module './vendor-chunks/jose.js'
+Require stack:
+- E:\Tenant\TenantManagementBackend\.next\server\webpack-runtime.js
+- E:\Tenant\TenantManagementBackend\.next\server\app\api\houses\[houseId]\units\route.js
+- E:\Tenant\TenantManagementBackend\node_modules\next\dist\server\require.js
+- E:\Tenant\TenantManagementBackend\node_modules\next\dist\server\load-components.js
+- E:\Tenant\TenantManagementBackend\node_modules\next\dist\build\utils.js
+- E:\Tenant\TenantManagementBackend\node_modules\next\dist\server\dev\static-paths-worker.js
+- E:\Tenant\TenantManagementBackend\node_modules\next\dist\compiled\jest-worker\processChild.js] {
+  type: 'Error',
+  code: 'MODULE_NOT_FOUND',
+  requireStack: [Array],
+  page: '/api/houses/b47987d6-adf2-436b-9790-7309be1fa202/units'
+}
+ ⨯ [Error: Cannot find module './vendor-chunks/jose.js'
+Require stack:
+- E:\Tenant\TenantManagementBackend\.next\server\webpack-runtime.js
+- E:\Tenant\TenantManagementBackend\.next\server\app\api\houses\[houseId]\units\route.js
+- E:\Tenant\TenantManagementBackend\node_modules\next\dist\server\require.js
+- E:\Tenant\TenantManagementBackend\node_modules\next\dist\server\load-components.js
+- E:\Tenant\TenantManagementBackend\node_modules\next\dist\build\utils.js
+- E:\Tenant\TenantManagementBackend\node_modules\next\dist\server\dev\static-paths-worker.js
+- E:\Tenant\TenantManagementBackend\node_modules\next\dist\compiled\jest-worker\processChild.js] {
+  type: 'Error',
+  code: 'MODULE_NOT_FOUND',
+  requireStack: [Array],
+  page: '/api/houses/b47987d6-adf2-436b-9790-7309be1fa202/units'
+}
+ ⨯ [Error: Cannot find module './vendor-chunks/jose.js'
+Require stack:
+- E:\Tenant\TenantManagementBackend\.next\server\webpack-runtime.js
+- E:\Tenant\TenantManagementBackend\.next\server\app\api\houses\[houseId]\units\route.js
+- E:\Tenant\TenantManagementBackend\node_modules\next\dist\server\require.js
+- E:\Tenant\TenantManagementBackend\node_modules\next\dist\server\load-components.js
+- E:\Tenant\TenantManagementBackend\node_modules\next\dist\build\utils.js
+- E:\Tenant\TenantManagementBackend\node_modules\next\dist\server\dev\static-paths-worker.js
+- E:\Tenant\TenantManagementBackend\node_modules\next\dist\compiled\jest-worker\processChild.js] {
+  type: 'Error',
+  code: 'MODULE_NOT_FOUND',
+  requireStack: [Array],
+  page: '/api/houses/b47987d6-adf2-436b-9790-7309be1fa202/units'
+}

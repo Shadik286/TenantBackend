@@ -46,7 +46,21 @@ export const runtime = "nodejs";
  *       // Yearly only
  *       monthly_breakdown: [
  *         { month: "2026-01", label: "Jan", income, expenses, net }
- *       ]
+ *       ],
+ *       rent_by_unit: [
+ *         { unit_id, unit_name, by_month: { "2026-01": "13500", ... }, year_total }
+ *       ],
+ *       expense_summary: [
+ *         { month: "2026-02", label: "Feb", description: "500 tk lights; ..." }
+ *       ],
+ *       // Annual-grid cells: rows = months, columns = category_columns.
+ *       // One entry per (month x category), including zero-amount cells.
+ *       expense_cells: [
+ *         { month: "2026-01", category: "MAINTENANCE", amount: "0.00", description: "" },
+ *         ...
+ *       ],
+ *       category_columns: ["MAINTENANCE", "UTILITIES", ...],
+ *       expense_total_by_month: { "2026-01": "0.00", ... }
  *     }
  *   }
  */
@@ -418,6 +432,23 @@ async function buildYearlyReport(houseId: string, year: string) {
 
   const incomeByMonth = new Map<string, Prisma.Decimal>();
   const expenseByMonth = new Map<string, Prisma.Decimal>();
+  // Per-unit × per-month rent collection matrix (unit_id -> month -> Decimal).
+  const rentByUnitMonth = new Map<string, Map<string, Prisma.Decimal>>();
+  // Per-unit display name cache (unit_id -> name).
+  const unitNameById = new Map<string, string>();
+  for (const u of units) {
+    unitNameById.set(u.id, u.name);
+    rentByUnitMonth.set(
+      u.id,
+      new Map(months.map((m) => [m, new Prisma.Decimal(0)])),
+    );
+  }
+  // Monthly short-description fragments, e.g. { "2026-02": "500 tk lights,
+  // 55000 lillah on 21 feb" }. Concatenated per month across expenses +
+  // confirmed payments in that month so the user sees what happened.
+  const descByMonth = new Map<string, string[]>();
+  for (const m of months) descByMonth.set(m, []);
+
   for (const m of months) {
     incomeByMonth.set(m, new Prisma.Decimal(0));
     expenseByMonth.set(m, new Prisma.Decimal(0));
@@ -429,14 +460,51 @@ async function buildYearlyReport(houseId: string, year: string) {
     const key = `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, "0")}`;
     const cur = incomeByMonth.get(key);
     if (cur) incomeByMonth.set(key, cur.add(p.amount));
+    // Per-unit contribution to rent for this month. `p` here was selected
+    // with just { amount, date_paid }, so we need to re-join via the
+    // rent_charge to know which unit. We re-query below.
   }
 
-  // Expenses: bucket by expense_date.
+  // To populate rent_by_unit we need (unit_id, date_paid, amount) tuples.
+  // Re-fetch with the join — keeps the main `payments` query above lean.
+  const paymentsForMatrix = await prisma.payment.findMany({
+    where: {
+      status: "CONFIRMED",
+      date_paid: { gte: startDate, lt: endDate },
+      rent_charge: { house_id: houseId, voided_at: null },
+    },
+    select: {
+      amount: true,
+      date_paid: true,
+      rent_charge: { select: { unit_id: true } },
+    },
+  });
+  for (const p of paymentsForMatrix) {
+    const unitId = p.rent_charge.unit_id;
+    const perUnit = rentByUnitMonth.get(unitId);
+    if (!perUnit) continue;
+    const key = `${p.date_paid.getUTCFullYear()}-${String(p.date_paid.getUTCMonth() + 1).padStart(2, "0")}`;
+    const cur = perUnit.get(key);
+    if (cur) perUnit.set(key, cur.add(p.amount));
+  }
+
+  // Expenses: bucket by expense_date + collect per-month descriptions.
   for (const e of expenses) {
     const d = e.expense_date;
     const key = `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, "0")}`;
     const cur = expenseByMonth.get(key);
     if (cur) expenseByMonth.set(key, cur.add(e.amount));
+
+    // Short description fragment: "{amount} {description or category}"
+    // e.g. "500 tk lights" or "55000 lillah on 21 feb". Keeps it scannable.
+    const arr = descByMonth.get(key);
+    if (arr) {
+      const amt = e.amount.toFixed(0);
+      const label = (e.description && e.description.trim()) || e.category;
+      // Trim and clamp to 60 chars to avoid one cell exploding.
+      const trimmed = label.trim().slice(0, 60);
+      arr.push(`${amt} ${trimmed}`);
+    }
   }
 
   const monthlyBreakdown = months.map((m) => {
@@ -450,6 +518,131 @@ async function buildYearlyReport(houseId: string, year: string) {
       net: income.sub(expense).toFixed(2),
     };
   });
+
+  // rent_by_unit: one row per active unit, sorted by total collected
+  // (desc) so the highest-earning unit is at the top — matches the
+  // user's spreadsheet layout ("# 1st", "# 2nd", ...).
+  const rentByUnit = Array.from(rentByUnitMonth.entries())
+    .map(([unitId, perMonth]) => {
+      let yearTotal = new Prisma.Decimal(0);
+      const byMonth: Record<string, string> = {};
+      for (const m of months) {
+        const v = perMonth.get(m) ?? new Prisma.Decimal(0);
+        byMonth[m] = v.toFixed(2);
+        yearTotal = yearTotal.add(v);
+      }
+      return {
+        unit_id: unitId,
+        unit_name: unitNameById.get(unitId) ?? "Unit",
+        by_month: byMonth,
+        year_total: yearTotal.toFixed(2),
+      };
+    })
+    .sort((a, b) => Number(b.year_total) - Number(a.year_total));
+
+  // expense_summary: one row per month, with a free-text "description"
+  // assembled from the actual expense records (and short notes from
+  // confirmed payments) for that month. Empty months are skipped.
+  const expenseSummary = months
+    .map((m) => {
+      const frags = descByMonth.get(m) ?? [];
+      return {
+        month: m,
+        label: monthLabel(m).split(" ")[0],
+        description: frags.join("; "),
+      };
+    })
+    .filter((row) => row.description.length > 0);
+
+  // --- Annual-grid expense cells ---------------------------------------
+  // For the "months-as-rows, categories-as-columns" grid on the Yearly
+  // view, we need:
+  //   - `category_columns`: the ordered list of category labels (using
+  //     `custom_category` when the row used the OTHER enum bucket),
+  //     surfaced in the same order as the Prisma `ExpenseCategory` enum
+  //     so the grid stays stable across requests.
+  //   - `expense_cells`: one row per (month, category) with the rolled-up
+  //     amount and the per-category description fragments. Empty cells
+  //     are still emitted so the frontend can show "—" for blanks.
+  //   - `expense_total_by_month`: convenience map so the rightmost "Total
+  //     Expns" column is a single lookup instead of a loop on the client.
+  const CATEGORY_ORDER: Array<typeof expenses[number]["category"]> = [
+    "MAINTENANCE",
+    "UTILITIES",
+    "INSURANCE",
+    "PROPERTY_TAX",
+    "MANAGEMENT_FEE",
+    "CLEANING",
+    "LANDSCAPING",
+    "LEGAL",
+    "MARKETING",
+    "SUPPLIES",
+    "RENOVATION",
+    "OTHER",
+  ];
+  const categoryLabel = (e: { category: string; custom_category: string | null }) => {
+    if (e.category === "OTHER" && e.custom_category && e.custom_category.trim()) {
+      return e.custom_category.trim();
+    }
+    return e.category;
+  };
+  // Collect the set of labels actually used this year, then sort them by
+  // the enum order so the column layout stays consistent month-to-month.
+  const labelsSeen = new Set<string>();
+  for (const e of expenses) labelsSeen.add(categoryLabel(e));
+  const knownUsed = CATEGORY_ORDER.filter((c) => labelsSeen.has(c));
+  const extraUsed = Array.from(labelsSeen).filter(
+    (l): l is string => !CATEGORY_ORDER.includes(l as typeof CATEGORY_ORDER[number]),
+  );
+  const categoryColumns: string[] = [...knownUsed, ...extraUsed];
+
+  // expense_by_month_category[month][categoryLabel] = { amount, description }
+  const expenseByMonthCategory = new Map<
+    string,
+    Map<string, { amount: Prisma.Decimal; description: string[] }>
+  >();
+  for (const m of months) {
+    expenseByMonthCategory.set(m, new Map());
+  }
+  for (const e of expenses) {
+    const d = e.expense_date;
+    const key = `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, "0")}`;
+    const label = categoryLabel(e);
+    const bucket = expenseByMonthCategory.get(key);
+    if (!bucket) continue;
+    const cell = bucket.get(label) ?? {
+      amount: new Prisma.Decimal(0),
+      description: [],
+    };
+    cell.amount = cell.amount.add(e.amount);
+    const desc = (e.description && e.description.trim()) || e.category;
+    cell.description.push(desc.trim().slice(0, 60));
+    bucket.set(label, cell);
+  }
+
+  const expenseCells: Array<{
+    month: string;
+    category: string;
+    amount: string;
+    description: string;
+  }> = [];
+  const expenseTotalByMonth: Record<string, string> = {};
+  for (const m of months) {
+    let monthTotal = new Prisma.Decimal(0);
+    const bucket = expenseByMonthCategory.get(m) ?? new Map();
+    for (const cat of categoryColumns) {
+      const cell = bucket.get(cat);
+      const amount = cell?.amount ?? new Prisma.Decimal(0);
+      monthTotal = monthTotal.add(amount);
+      expenseCells.push({
+        month: m,
+        category: cat,
+        amount: amount.toFixed(2),
+        description: (cell?.description ?? []).join("; "),
+      });
+    }
+    expenseTotalByMonth[m] = monthTotal.toFixed(2);
+  }
 
   // Totals across the whole year.
   let totalRentCollected = new Prisma.Decimal(0);
@@ -492,5 +685,10 @@ async function buildYearlyReport(houseId: string, year: string) {
     other_income_count: otherIncomeAgg._count._all ?? 0,
 
     monthly_breakdown: monthlyBreakdown,
+    rent_by_unit: rentByUnit,
+    expense_summary: expenseSummary,
+    expense_cells: expenseCells,
+    category_columns: categoryColumns,
+    expense_total_by_month: expenseTotalByMonth,
   };
 }
