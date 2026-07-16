@@ -3,6 +3,9 @@ import { z } from "zod";
 import { Prisma } from "@prisma/client";
 import { requireUserId } from "@/lib/require-user";
 import { prisma } from "@/lib/prisma";
+import {
+  invalidateReportSnapshotsForHouse,
+} from "@/lib/report-cache";
 
 export const runtime = "nodejs";
 
@@ -207,6 +210,20 @@ export async function POST(request: NextRequest) {
         created_by: ownerId,
       },
       include: { unit: true },
+    });
+    // Drop the matching MONTHLY snapshot so the next /api/reports call
+    // recomputes (and picks up the brand-new expense row). Best-effort:
+    // a failed invalidation just means the user sees a stale PDF until
+    // the next cache-miss rebuild.
+    const monthKey = `${expenseDate.getUTCFullYear()}-${String(
+      expenseDate.getUTCMonth() + 1,
+    ).padStart(2, "0")}`;
+    // Drop both the monthly snapshot for this month and the yearly
+    // snapshot for this year — expenses change yearly totals too, so
+    // a stale YEARLY snapshot would hide the new amount.
+    await invalidateReportSnapshotsForHouse(input.house_id, {
+      monthKey,
+      yearKey: monthKey.slice(0, 4),
     });
     return NextResponse.json({ data: serializeExpense(created) }, { status: 201 });
   } catch (e) {

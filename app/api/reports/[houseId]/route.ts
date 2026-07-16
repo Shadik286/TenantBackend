@@ -6,6 +6,22 @@ import { prisma } from "@/lib/prisma";
 export const runtime = "nodejs";
 
 /**
+ * Current period keys (UTC) — used to decide whether a snapshot can be
+ * treated as final. The *current* month/year is never "final" because new
+ * expenses/payments can land any moment, so we always recompute for the
+ * current period. Without this guard, the first request to a brand-new
+ * month would freeze `total_expenses` at the value seen on day 1, and
+ * invalidate-on-write would be pointless.
+ */
+function currentMonthKey(): string {
+  const d = new Date();
+  return `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, "0")}`;
+}
+function currentYearKey(): string {
+  return String(new Date().getUTCFullYear());
+}
+
+/**
  * GET /api/reports/[houseId]
  *
  * Query params:
@@ -198,16 +214,24 @@ async function buildMonthlyReport(houseId: string, month: string) {
   // so this is a single indexed point-lookup. We always compute fresh
   // when no final snapshot exists, then UPSERT it so the next request
   // is a one-row read.
-  const cached = await prisma.reportSnapshot.findUnique({
-    where: {
-      house_id_period_type_period_key: {
-        house_id: houseId,
-        period_type: "MONTHLY",
-        period_key: month,
-      },
-    },
-    select: { data: true, is_final: true },
-  });
+  //
+  // Important: the *current* month is never "final" because new
+  // expenses/payments can land any moment. We skip the lookup entirely
+  // for the current month so we never serve a frozen `total_expenses`
+  // from a snapshot taken earlier today.
+  const isCurrentMonth = month === currentMonthKey();
+  const cached = isCurrentMonth
+    ? null
+    : await prisma.reportSnapshot.findUnique({
+        where: {
+          house_id_period_type_period_key: {
+            house_id: houseId,
+            period_type: "MONTHLY",
+            period_key: month,
+          },
+        },
+        select: { data: true, is_final: true },
+      });
   if (cached?.is_final) {
     return cached.data as any;
   }
@@ -383,7 +407,13 @@ async function buildMonthlyReport(houseId: string, month: string) {
   };
 
   // Best-effort cache write — a failed UPSERT must never break the live
-  // request, so swallow any error and log it.
+  // request, but we DO log failures now so silent cache-write bugs don't
+  // hide behind the try/catch (see lib/report-cache.ts).
+  //
+  // `is_final` is only true for past months. The current month is always
+  // recomputed on the next request — that's what keeps `total_expenses`
+  // fresh when an expense is added after the snapshot was first written.
+  const isFinal = !isCurrentMonth;
   try {
     await prisma.reportSnapshot.upsert({
       where: {
@@ -406,7 +436,7 @@ async function buildMonthlyReport(houseId: string, month: string) {
         overdue_amount: new Prisma.Decimal(report.overdue_amount),
         rent_roll: report.rent_roll as any,
         data: report as any,
-        is_final: true,
+        is_final: isFinal,
       },
       update: {
         total_rent_collected: new Prisma.Decimal(report.total_rent_collected),
@@ -418,13 +448,19 @@ async function buildMonthlyReport(houseId: string, month: string) {
         overdue_amount: new Prisma.Decimal(report.overdue_amount),
         rent_roll: report.rent_roll as any,
         data: report as any,
-        is_final: true,
+        is_final: isFinal,
         updated_at: new Date(),
       },
     });
-  } catch {
+  } catch (e) {
     // Snapshot write is best-effort — never fail the request because the
-    // cache layer hiccuped; the next request will simply recompute.
+    // cache layer hiccuped; the next request will simply recompute. But
+    // log so a recurring failure is visible in Vercel logs.
+    console.error("[reports] monthly snapshot upsert failed", {
+      houseId,
+      month,
+      error: e instanceof Error ? e.message : String(e),
+    });
   }
 
   return report;
@@ -448,16 +484,23 @@ async function buildYearlyReport(houseId: string, year: string) {
   // Cache lookup: same pattern as the monthly report. A finalised
   // ReportSnapshot row for (house, YEARLY, year) means the full
   // aggregation has been done before and we can serve it as-is.
-  const cached = await prisma.reportSnapshot.findUnique({
-    where: {
-      house_id_period_type_period_key: {
-        house_id: houseId,
-        period_type: "YEARLY",
-        period_key: year,
-      },
-    },
-    select: { data: true, is_final: true },
-  });
+  //
+  // The current year is never "final" — same reasoning as monthly: an
+  // expense or payment added later in the year must be visible in the
+  // next request, so we always recompute.
+  const isCurrentYear = year === currentYearKey();
+  const cached = isCurrentYear
+    ? null
+    : await prisma.reportSnapshot.findUnique({
+        where: {
+          house_id_period_type_period_key: {
+            house_id: houseId,
+            period_type: "YEARLY",
+            period_key: year,
+          },
+        },
+        select: { data: true, is_final: true },
+      });
   if (cached?.is_final) {
     return cached.data as any;
   }
@@ -468,6 +511,7 @@ async function buildYearlyReport(houseId: string, year: string) {
     otherIncomeAgg,
     payments,
     units,
+    overdueAgg,
   ] = await Promise.all([
     prisma.rentCharge.findMany({
       where: {
@@ -501,7 +545,14 @@ async function buildYearlyReport(houseId: string, year: string) {
         date_paid: { gte: startDate, lt: endDate },
         rent_charge: { house_id: houseId, voided_at: null },
       },
-      select: { amount: true, date_paid: true },
+      select: {
+        amount: true,
+        date_paid: true,
+        // Pull the unit_id through the rent_charge join in the SAME round
+        // trip — saves one query per yearly report (was the second
+        // `paymentsForMatrix` re-fetch at the bottom of this function).
+        rent_charge: { select: { unit_id: true } },
+      },
     }),
     prisma.unit.findMany({
       where: { house_id: houseId, deleted_at: null },
@@ -511,6 +562,17 @@ async function buildYearlyReport(houseId: string, year: string) {
           select: { id: true },
         },
       },
+    }),
+    // Overdue amount for this year — run in the same Promise.all so the
+    // client doesn't pay a sequential round-trip on the critical path.
+    prisma.rentCharge.aggregate({
+      where: {
+        house_id: houseId,
+        status: "OVERDUE",
+        voided_at: null,
+        due_month: { gte: `${year}-01`, lte: `${year}-12` },
+      },
+      _sum: { amount_due: true },
     }),
   ]);
 
@@ -545,37 +607,23 @@ async function buildYearlyReport(houseId: string, year: string) {
   }
 
   // Payments: bucket by the payment's own date_paid (not charge due_month).
+  // The `rent_charge.unit_id` is already joined in the main query so we no
+  // longer need the second `paymentsForMatrix` re-fetch (was eating one
+  // extra round trip per yearly report).
   for (const p of payments) {
     const d = p.date_paid;
     const key = `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, "0")}`;
     const cur = incomeByMonth.get(key);
     if (cur) incomeByMonth.set(key, cur.add(p.amount));
-    // Per-unit contribution to rent for this month. `p` here was selected
-    // with just { amount, date_paid }, so we need to re-join via the
-    // rent_charge to know which unit. We re-query below.
-  }
 
-  // To populate rent_by_unit we need (unit_id, date_paid, amount) tuples.
-  // Re-fetch with the join — keeps the main `payments` query above lean.
-  const paymentsForMatrix = await prisma.payment.findMany({
-    where: {
-      status: "CONFIRMED",
-      date_paid: { gte: startDate, lt: endDate },
-      rent_charge: { house_id: houseId, voided_at: null },
-    },
-    select: {
-      amount: true,
-      date_paid: true,
-      rent_charge: { select: { unit_id: true } },
-    },
-  });
-  for (const p of paymentsForMatrix) {
-    const unitId = p.rent_charge.unit_id;
+    // Per-unit contribution to rent for this month — `p.rent_charge.unit_id`
+    // was fetched in the same `Payment.findMany` call.
+    const unitId = p.rent_charge?.unit_id;
+    if (unitId == null) continue;
     const perUnit = rentByUnitMonth.get(unitId);
     if (!perUnit) continue;
-    const key = `${p.date_paid.getUTCFullYear()}-${String(p.date_paid.getUTCMonth() + 1).padStart(2, "0")}`;
-    const cur = perUnit.get(key);
-    if (cur) perUnit.set(key, cur.add(p.amount));
+    const curPerUnit = perUnit.get(key);
+    if (curPerUnit) perUnit.set(key, curPerUnit.add(p.amount));
   }
 
   // Expenses: bucket by expense_date + collect per-month descriptions.
@@ -744,13 +792,10 @@ async function buildYearlyReport(houseId: string, year: string) {
     : new Prisma.Decimal(0);
   const netIncome = totalRentCollected.add(totalOtherIncome).sub(totalExpenses);
 
-  // Overdue amount at the moment in time of this call.
-  const overdueCharges = await prisma.rentCharge.aggregate({
-    where: { house_id: houseId, status: "OVERDUE", voided_at: null },
-    _sum: { amount_due: true },
-  });
-  const overdueAmount = overdueCharges._sum.amount_due
-    ? new Prisma.Decimal(overdueCharges._sum.amount_due.toString())
+  // Overdue amount: aggregates were already fetched concurrently with the
+  // rest of the report payload (in the main Promise.all). Just unpack it.
+  const overdueAmount = overdueAgg._sum.amount_due
+    ? new Prisma.Decimal(overdueAgg._sum.amount_due.toString())
     : new Prisma.Decimal(0);
 
   const occupiedUnits = units.filter((u) => u.leases.length > 0).length;
@@ -804,7 +849,9 @@ async function buildYearlyReport(houseId: string, year: string) {
         overdue_amount: new Prisma.Decimal(report.overdue_amount),
         rent_roll: [],
         data: report as any,
-        is_final: true,
+        // Only mark past years as final. The current year is recomputed
+        // on every request, so its snapshot never serves stale data.
+        is_final: !isCurrentYear,
       },
       update: {
         total_rent_collected: new Prisma.Decimal(report.total_rent_collected),
@@ -815,13 +862,18 @@ async function buildYearlyReport(houseId: string, year: string) {
         vacant_units: report.vacant_units,
         overdue_amount: new Prisma.Decimal(report.overdue_amount),
         data: report as any,
-        is_final: true,
+        is_final: !isCurrentYear,
         updated_at: new Date(),
       },
     });
-  } catch {
+  } catch (e) {
     // Cache write is best-effort; never fail the request because the
-    // snapshot layer hiccuped.
+    // snapshot layer hiccuped. But log so a recurring failure is visible.
+    console.error("[reports] yearly snapshot upsert failed", {
+      houseId,
+      year,
+      error: e instanceof Error ? e.message : String(e),
+    });
   }
 
   return report;

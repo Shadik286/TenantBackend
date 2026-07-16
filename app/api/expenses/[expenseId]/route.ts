@@ -3,6 +3,11 @@ import { z } from "zod";
 import { Prisma } from "@prisma/client";
 import { requireUserId } from "@/lib/require-user";
 import { prisma } from "@/lib/prisma";
+import { invalidateReportSnapshotsForHouse } from "@/lib/report-cache";
+
+function monthKeyFor(date: Date): string {
+  return `${date.getUTCFullYear()}-${String(date.getUTCMonth() + 1).padStart(2, "0")}`;
+}
 
 export const runtime = "nodejs";
 
@@ -144,6 +149,19 @@ export async function PATCH(
       data,
       include: { unit: true },
     });
+    // Drop the snapshot for the row's old month AND the new month (if the
+    // PATCH moved expense_date across a month boundary, the destination
+    // month's snapshot needs to be recomputed too). Also drop the YEARLY
+    // snapshot for each affected year — expenses feed yearly totals too.
+    const oldKey = monthKeyFor(expense.expense_date);
+    const newKey = monthKeyFor(updated.expense_date);
+    const months = new Set<string>([oldKey, newKey]);
+    for (const monthKey of months) {
+      await invalidateReportSnapshotsForHouse(updated.house_id, {
+        monthKey,
+        yearKey: monthKey.slice(0, 4),
+      });
+    }
     return NextResponse.json({ data: serializeExpense(updated) });
   } catch (e) {
     const message = e instanceof Error ? e.message : "Unknown error";
@@ -175,6 +193,13 @@ export async function DELETE(
     const deleted = await prisma.expense.update({
       where: { id: expenseId },
       data: { deleted_at: new Date() },
+    });
+    // Soft-delete still affects aggregations, so drop the cached snapshot
+    // for the month (and year) the row belonged to.
+    const monthKey = monthKeyFor(expense.expense_date);
+    await invalidateReportSnapshotsForHouse(deleted.house_id, {
+      monthKey,
+      yearKey: monthKey.slice(0, 4),
     });
     return NextResponse.json({
       data: { id: deleted.id, deleted: true, deleted_at: deleted.deleted_at },

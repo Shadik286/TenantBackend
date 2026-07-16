@@ -3,6 +3,7 @@ import { z } from "zod";
 import { Prisma } from "@prisma/client";
 import { requireUserId } from "@/lib/require-user";
 import { prisma } from "@/lib/prisma";
+import { invalidateReportSnapshotsForHouse } from "@/lib/report-cache";
 
 export const runtime = "nodejs";
 
@@ -439,6 +440,19 @@ export async function POST(request: NextRequest) {
       });
 
       return created;
+    });
+
+    // Payment totals feed both the monthly and yearly reports. Invalidate
+    // the matching snapshots so the next /api/reports request rebuilds
+    // with the new payment included. The cache-write path is now also
+    // safe: see app/api/reports/[houseId]/route.ts — the current month
+    // and year never carry `is_final: true`, so an invalidate that races
+    // with a concurrent GET simply drops the (non-final) snapshot.
+    const invalidateMonthKey = charge!.due_month;
+    const invalidateYearKey = invalidateMonthKey.slice(0, 4);
+    await invalidateReportSnapshotsForHouse(charge!.house_id, {
+      monthKey: invalidateMonthKey,
+      yearKey: invalidateYearKey,
     });
 
     return NextResponse.json({ data: serializePayment(result) }, { status: 201 });

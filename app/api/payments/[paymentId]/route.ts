@@ -3,6 +3,7 @@ import { z } from "zod";
 import { Prisma } from "@prisma/client";
 import { requireUserId } from "@/lib/require-user";
 import { prisma } from "@/lib/prisma";
+import { invalidateReportSnapshotsForHouse } from "@/lib/report-cache";
 
 export const runtime = "nodejs";
 
@@ -191,6 +192,25 @@ export async function PATCH(
       return next;
     });
 
+    // Drop cached report snapshots for both the original month (if the
+    // payment moved to a different month) and the new month so the next
+    // /api/reports call rebuilds. If the months are the same this is
+    // effectively one cache key.
+    const charge = updated.rent_charge;
+    if (charge) {
+      const oldMonthKey = payment.rent_charge?.due_month;
+      const newMonthKey = charge.due_month;
+      const monthsToInvalidate = new Set<string>();
+      if (oldMonthKey) monthsToInvalidate.add(oldMonthKey);
+      if (newMonthKey) monthsToInvalidate.add(newMonthKey);
+      for (const monthKey of monthsToInvalidate) {
+        await invalidateReportSnapshotsForHouse(charge.house_id, {
+          monthKey,
+          yearKey: monthKey.slice(0, 4),
+        });
+      }
+    }
+
     return NextResponse.json({ data: serializePayment(updated) });
   } catch (e) {
     const message = e instanceof Error ? e.message : "Unknown error";
@@ -252,6 +272,17 @@ export async function DELETE(
       }
       return voided;
     });
+
+    // Voiding a payment changes the month's `total_rent_collected`, so
+    // drop the matching snapshot.
+    const charge = payment.rent_charge;
+    if (charge?.due_month && charge.house_id) {
+      const monthKey = charge.due_month;
+      await invalidateReportSnapshotsForHouse(charge.house_id, {
+        monthKey,
+        yearKey: monthKey.slice(0, 4),
+      });
+    }
 
     return NextResponse.json({
       data: { id: result.id, voided: true, voided_at: result.voided_at },
