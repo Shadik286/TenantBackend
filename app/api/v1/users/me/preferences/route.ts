@@ -15,7 +15,11 @@ const DEFAULTS = {
 const NOTIFICATIONS = new Set(["all", "important", "none"]);
 const LANGUAGES = new Set(["en-US", "fr-FR", "ar-MA"]);
 const APPEARANCES = new Set(["light", "dark", "system"]);
-const CURRENCIES = new Set(["USD", "EUR", "MAD", "GBP"]);
+// Currency is accepted as any 3-letter uppercase ISO-4217-style code
+// so the backend stays open to every entry in
+// `tenant_management/lib/currency.dart` (and future additions) without
+// having to redeploy. We only enforce the shape, not an allow-list.
+const CURRENCY_RE = /^[A-Z]{3}$/;
 
 function validatePatch(
   patch: Record<string, unknown>
@@ -45,8 +49,8 @@ function validatePatch(
   }
   if ("currency" in patch) {
     const v = String(patch.currency ?? "");
-    if (!CURRENCIES.has(v)) {
-      return { ok: false, error: "currency must be one of USD|EUR|MAD|GBP" };
+    if (!CURRENCY_RE.test(v)) {
+      return { ok: false, error: "currency must be a 3-letter ISO code (e.g. USD, EUR, MAD)" };
     }
     data.currency = v;
   }
