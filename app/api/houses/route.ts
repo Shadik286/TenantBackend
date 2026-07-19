@@ -80,12 +80,19 @@ export async function POST(request: NextRequest) {
     description?: string | null;
   };
 
-  if (!name || !address || !city || !country) {
+  // Only `name` is required. The rest are optional and default to empty
+  // strings so the row can still be created from a mobile "quick add"
+  // where the user may not have all the location details yet.
+  if (!name || !name.trim()) {
     return NextResponse.json(
-      { error: "name, address, city, and country are required." },
+      { error: "Property name is required." },
       { status: 400 }
     );
   }
+  const safeName = name.trim();
+  const safeAddress = (address ?? "").trim();
+  const safeCity = (city ?? "").trim();
+  const safeCountry = (country ?? "").trim();
 
   // Plan-limit check before insert. Soft-deleted houses do NOT count against
   // the limit, matching the architecture's free-tier rule.
@@ -113,10 +120,10 @@ export async function POST(request: NextRequest) {
   const house = await prisma.house.create({
     data: {
       owner_id: ownerId,
-      name,
-      address,
-      city,
-      country,
+      name: safeName,
+      address: safeAddress,
+      city: safeCity,
+      country: safeCountry,
       description: description ?? null,
     },
   });
