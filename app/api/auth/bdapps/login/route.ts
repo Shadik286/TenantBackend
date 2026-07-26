@@ -12,36 +12,32 @@ export const dynamic = "force-dynamic";
 // bdapps-format login
 // ---------------------------------------------------------------------------
 //
-// Mirrors the JS reference: phone + OTP only. No password, no email collected
-// from the user. On a verified OTP we:
-//   1. Look up the user by phone (already-registered case).
-//   2. Otherwise create one with just `full_name` + `phone`. The Prisma
-//      `User.email` column is required + unique, so we synthesize a stable
-//      per-phone placeholder email (`bdapps+<digits>@tenant.local`) that the
-//      owner can later swap in the profile screen if they want.
-//   3. Hand them the **PRO** plan by default (per product requirement: bdapps
-//      users are paying customers via the gateway subscription).
-//   4. Mint a 30-day NextAuth JWT and return it in the body so the Flutter
-//      `ApiClient` can attach it as `Authorization: Bearer <token>` — exactly
-//      the same shape the standard `/api/auth/login` returns.
+// The bdapps gateway (androidcontentapp.xyz / Weather365SDK) handles the
+// subscription check, the OTP request, and the OTP verification entirely
+// client-side. Our backend is NEVER involved in those steps — there is no
+// `verify_otp.php` round-trip here, we don't re-check the subscription, and
+// we don't trust the OTP the Flutter app sends.
 //
-// Wire body accepted from the Flutter client:
+// All this route does is:
+//   1. Look up the user by phone (already-registered case), OR
+//   2. Create a brand-new user with a PRO subscription if the phone is
+//      new to our database.
+//   3. Mint a 30-day NextAuth JWT and return it so the Flutter app can
+//      hit `/api/v1/users/...`, `/api/houses`, etc. without 401-ing.
+//
+// The Pro subscription is a product decision: bdapps users are paying
+// customers via the gateway, so the moment they show up here we treat
+// them as PRO. There's no separate "activate subscription" step.
+//
+// Wire body accepted from the Flutter client (POST /api/auth/bdapps/login):
 //   {
-//     "name":           string,   // display name (used for new users)
-//     "phone":          string,   // E.164-ish, "+880..." or local digits
-//     "otp":            string,   // the code the user typed in
-//     "referenceNo":    string,   // referenceNo from send_otp.php
-//     "mode":           "subscriber-check" (optional) — skips OTP and
-//                                         authorizes purely from the
-//                                         gateway's subscription check.
+//     "phone":  string,  // E.164 or local digits — we just store as-is
+//     "name":   string?  // optional display name (new users only)
 //   }
 //
-// On a 200 we return `{ ok, token, user }` matching `/api/auth/login` so the
-// Flutter `AuthService.login(...)` extractor already works against the body.
-
-// The bdapps gateway the JS reference uses. Same value as in the Flutter
-// client so both stay in sync if it ever needs to change.
-const BDAPPS_BASE = "https://androidcontentapp.xyz/Weather365SDK";
+// On a 200 we return `{ ok, token, user }` matching `/api/auth/login` so
+// `AuthService._extractTokenCandidates(...)` already works against the
+// body without any client-side change.
 
 const SECRET = process.env.NEXTAUTH_SECRET;
 const COOKIE_NAME =
@@ -55,94 +51,10 @@ function normalizePhone(input: string): string {
 
 // Build a stable, unique, RFC-ish email from a phone number. Phone numbers
 // are globally unique in the User table so this is safe to use as the
-// `email` placeholder.
+// `email` placeholder (the column is required + unique).
 function syntheticEmailForPhone(phone: string): string {
   const digits = phone.replace(/[^\d]/g, "");
   return `bdapps+${digits}@tenant.local`;
-}
-
-async function verifyOtpWithGateway(opts: {
-  phone: string;
-  otp: string;
-  referenceNo: string;
-}): Promise<{ ok: boolean; statusCode?: string; message?: string }> {
-  // Match the JS reference exactly: form-encoded body, x-www-form-urlencoded.
-  const body = new URLSearchParams({
-    Otp: opts.otp,
-    referenceNo: opts.referenceNo,
-    user_mobile: opts.phone,
-  });
-  try {
-    const res = await fetch(`${BDAPPS_BASE}/verify_otp.php`, {
-      method: "POST",
-      headers: { "Content-Type": "application/x-www-form-urlencoded" },
-      body,
-    });
-    const text = await res.text();
-    let data: Record<string, unknown> = {};
-    try {
-      const parsed = JSON.parse(text);
-      if (parsed && typeof parsed === "object") data = parsed as Record<string, unknown>;
-    } catch {
-      // Gateway returned non-JSON; surface as a failure with the raw body.
-      return { ok: false, message: text.slice(0, 200) };
-    }
-    const statusCode = typeof data.statusCode === "string" ? data.statusCode : "";
-    return {
-      ok: statusCode === "S1000",
-      statusCode,
-      message: typeof data.message === "string" ? data.message : undefined,
-    };
-  } catch (err) {
-    const message = err instanceof Error ? err.message : "Network error";
-    return { ok: false, message };
-  }
-}
-
-// 14-day trial window — same length as standard /register uses so the two
-// flows feel identical to the user. PRO users don't expire either way but
-// keeping the field populated keeps the dashboard's "TRIALING" / "ACTIVE"
-// labels honest.
-const FREE_TRIAL_DAYS = 14;
-
-// Subscriber-only fast path: hit check_subscription.php directly. Used when
-// the Flutter client already knows (from `check_subscription.php` or the
-// E1351 / "already registered" response from `send_otp.php`) that the phone
-// is subscribed. We never trust the client's word — we re-verify against the
-// gateway before minting a JWT.
-async function checkSubscriptionWithGateway(
-  phone: string
-): Promise<{ subscribed: boolean; message?: string }> {
-  try {
-    const res = await fetch(`${BDAPPS_BASE}/check_subscription.php`, {
-      method: "POST",
-      headers: { "Content-Type": "application/x-www-form-urlencoded" },
-      body: new URLSearchParams({ user_mobile: phone }),
-    });
-    const text = await res.text();
-    let data: Record<string, unknown> = {};
-    try {
-      const parsed = JSON.parse(text);
-      if (parsed && typeof parsed === "object") data = parsed as Record<string, unknown>;
-    } catch {
-      return { subscribed: false, message: text.slice(0, 200) };
-    }
-    const status =
-      typeof data.subscriptionStatus === "string"
-        ? data.subscriptionStatus.toUpperCase()
-        : "";
-    const code = typeof data.statusCode === "string" ? data.statusCode : "";
-    const message =
-      typeof data.message === "string" ? data.message.toLowerCase() : "";
-    const subscribed =
-      status === "REGISTERED" ||
-      code === "E1351" ||
-      message.includes("already registered");
-    return { subscribed, message: typeof data.message === "string" ? data.message : undefined };
-  } catch (err) {
-    const message = err instanceof Error ? err.message : "Network error";
-    return { subscribed: false, message };
-  }
 }
 
 export async function POST(request: Request) {
@@ -154,31 +66,16 @@ export async function POST(request: Request) {
   }
 
   const body = (await request.json().catch(() => null)) as {
-    name?: unknown;
     phone?: unknown;
-    otp?: unknown;
-    referenceNo?: unknown;
-    mode?: unknown;
+    name?: unknown;
   } | null;
 
   const phoneRaw = typeof body?.phone === "string" ? body.phone.trim() : "";
-  const otp = typeof body?.otp === "string" ? body.otp.trim() : "";
-  const refNo = typeof body?.referenceNo === "string" ? body.referenceNo.trim() : "";
   const nameRaw = typeof body?.name === "string" ? body.name.trim() : "";
-  const mode =
-    typeof body?.mode === "string" && body.mode === "subscriber-check"
-      ? "subscriber-check"
-      : "otp";
 
   if (!phoneRaw) {
     return NextResponse.json(
       { error: "phone is required." },
-      { status: 400 }
-    );
-  }
-  if (mode === "otp" && (!otp || !refNo)) {
-    return NextResponse.json(
-      { error: "phone, otp, and referenceNo are required." },
       { status: 400 }
     );
   }
@@ -192,43 +89,15 @@ export async function POST(request: Request) {
     );
   }
 
-  // 1) Verify the OTP / subscription against the bdapps gateway. We never
-  //    trust the client.
-  if (mode === "subscriber-check") {
-    const check = await checkSubscriptionWithGateway(normalizedPhone);
-    if (!check.subscribed) {
-      return NextResponse.json(
-        {
-          error: check.message ?? "Phone is not subscribed.",
-        },
-        { status: 401 }
-      );
-    }
-  } else {
-    const verify = await verifyOtpWithGateway({
-      phone: normalizedPhone,
-      otp,
-      referenceNo: refNo,
-    });
-    if (!verify.ok) {
-      return NextResponse.json(
-        {
-          error: verify.message ?? "OTP is incorrect.",
-          statusCode: verify.statusCode,
-        },
-        { status: 401 }
-      );
-    }
-  }
-
-  // 2) Look up an existing user by phone, or create one with the PRO plan.
+  // 1) Look up an existing user by phone, or create one with the PRO plan.
   let user: User | null = await prisma.user.findFirst({
     where: { phone: normalizedPhone },
   });
 
   if (!user) {
     const email = syntheticEmailForPhone(normalizedPhone);
-    const displayName = nameRaw.length > 0 ? nameRaw : `User ${phoneDigits.slice(-6)}`;
+    const displayName =
+      nameRaw.length > 0 ? nameRaw : `User ${phoneDigits.slice(-6)}`;
 
     try {
       user = await prisma.$transaction(async (tx) => {
@@ -241,8 +110,7 @@ export async function POST(request: Request) {
 
         // bdapps users don't have a password — store an unguessable random
         // hash so direct /api/auth/login attempts with an empty string can't
-        // match. `bcrypt.compare('', hash)` is guaranteed to return false,
-        // but we make doubly sure by hashing a fresh random string.
+        // match.
         const passwordHash = await bcrypt.hash(
           `bdapps:${normalizedPhone}:${Date.now()}:${Math.random()}`,
           10
@@ -257,10 +125,11 @@ export async function POST(request: Request) {
           },
         });
 
+        // PRO never expires in this product; pick 1 year out so the
+        // dashboard "ACTIVE" badge stays honest without us having to write
+        // a cron.
         const now = new Date();
         const periodEnd = new Date(now);
-        // PRO never expires in this product; pick 1 year out so the dashboard
-        // "ACTIVE" badge stays honest without us having to write a cron.
         periodEnd.setFullYear(periodEnd.getFullYear() + 1);
 
         await tx.subscription.create({
@@ -307,7 +176,7 @@ export async function POST(request: Request) {
     );
   }
 
-  // 3) Mint the same NextAuth JWT the standard login returns so Flutter's
+  // 2) Mint the same NextAuth JWT the standard login returns so Flutter's
   // existing bearer-token machinery works without any client-side change.
   const token = await encode({
     token: {
