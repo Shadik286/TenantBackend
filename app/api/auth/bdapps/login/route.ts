@@ -104,7 +104,7 @@ export async function POST(request: Request) {
         const proPlan = await tx.plan.findUnique({ where: { name: "PRO" } });
         if (!proPlan) {
           throw new Error(
-            "PRO plan is missing. Run `npm run db:seed` before accepting bdapps logins."
+            "PRO_PLAN_MISSING: run `npm run db:seed` against the target database before accepting bdapps logins."
           );
         }
 
@@ -145,24 +145,64 @@ export async function POST(request: Request) {
         return created;
       });
     } catch (err) {
+      // Surface the real failure on the server console so we don't have to
+      // chase ghost bugs through the Flutter UI alone — and include the same
+      // information in the response body so the app can show a useful
+      // message instead of a generic "could not create bdapps account" line.
+      if (err instanceof Prisma.PrismaClientKnownRequestError) {
+        console.error("[bdapps/login] prisma error", {
+          code: err.code,
+          meta: err.meta,
+          message: err.message,
+        });
+      } else {
+        console.error("[bdapps/login] uncaught", err);
+      }
+
       if (
         err instanceof Prisma.PrismaClientKnownRequestError &&
         err.code === "P2002"
       ) {
-        // A concurrent request just created the user — re-read it.
+        // A concurrent request just created the user (typically on
+        // `users.email` or `users.phone`) — re-read it and continue.
         user = await prisma.user.findFirst({
           where: { phone: normalizedPhone },
         });
         if (!user) {
           return NextResponse.json(
-            { error: "Could not finalize bdapps registration." },
+            {
+              error: "Could not finalize bdapps registration.",
+              reason: "race_lost",
+            },
             { status: 500 }
           );
         }
+      } else if (
+        err instanceof Prisma.PrismaClientKnownRequestError &&
+        err.code === "P2003"
+      ) {
+        // Foreign key failure — most commonly a missing PRO plan row because
+        // `npm run db:seed` was never run on the target database.
+        return NextResponse.json(
+          {
+            error: "Failed to create bdapps account.",
+            reason: "missing_plan",
+            details:
+              "PRO plan is missing from the database. Run `npm run db:seed` against the target environment.",
+          },
+          { status: 500 }
+        );
       } else {
         const message = err instanceof Error ? err.message : "Unknown error";
         return NextResponse.json(
-          { error: "Failed to create bdapps account.", details: message },
+          {
+            error: "Failed to create bdapps account.",
+            reason:
+              err instanceof Prisma.PrismaClientKnownRequestError
+                ? err.code
+                : "unknown",
+            details: message,
+          },
           { status: 500 }
         );
       }
