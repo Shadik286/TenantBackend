@@ -14,7 +14,7 @@ export const dynamic = "force-dynamic";
  * to avoid the question of "did the upload route get rebuilt?". If this
  * endpoint is missing from the build, Vercel genuinely didn't deploy.
  *
- * BUILD MARKER: route-v6
+ * BUILD MARKER: route-v7
  */
 export async function GET() {
   const cloudName = process.env.CLOUDINARY_CLOUD_NAME ?? null;
