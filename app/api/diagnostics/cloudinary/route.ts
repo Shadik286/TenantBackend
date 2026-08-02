@@ -13,6 +13,8 @@ export const dynamic = "force-dynamic";
  * This is intentionally a separate path from `/api/uploads/cloudinary`
  * to avoid the question of "did the upload route get rebuilt?". If this
  * endpoint is missing from the build, Vercel genuinely didn't deploy.
+ *
+ * BUILD MARKER: route-v6
  */
 export async function GET() {
   const cloudName = process.env.CLOUDINARY_CLOUD_NAME ?? null;
