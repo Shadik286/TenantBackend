@@ -146,7 +146,35 @@ export async function POST(request: NextRequest) {
       },
     });
   } catch (e) {
-    const message = e instanceof Error ? e.message : "Cloudinary upload failed.";
+    // Cloudinary's SDK throws a plain object (not always an Error) with
+    // fields like { http_code, message, name, error: { message } }. Pull
+    // the most descriptive field we can find so the Flutter side can show
+    // a useful snackbar and the Vercel function log gives us enough
+    // context to diagnose without re-running the request.
+    const raw = e as unknown;
+    let message = "Cloudinary upload failed.";
+    if (raw instanceof Error && raw.message) {
+      message = raw.message;
+    } else if (raw && typeof raw === "object") {
+      const obj = raw as Record<string, unknown>;
+      const nested = obj.error as Record<string, unknown> | undefined;
+      const candidate =
+        (typeof nested?.message === "string" && nested.message) ||
+        (typeof obj.message === "string" && obj.message) ||
+        (typeof obj.name === "string" && obj.name);
+      if (candidate) message = String(candidate);
+      else message = JSON.stringify(obj);
+    } else if (typeof raw === "string") {
+      message = raw;
+    }
+    // eslint-disable-next-line no-console
+    console.error("[cloudinary] upload failed", {
+      message,
+      raw: raw instanceof Error ? { name: raw.name, stack: raw.stack } : raw,
+      folder,
+      size: file.size,
+      type: file.type,
+    });
     return NextResponse.json(
       { error: "CLOUDINARY_UPLOAD_FAILED", message },
       { status: 502 },
