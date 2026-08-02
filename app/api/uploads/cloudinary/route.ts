@@ -190,7 +190,8 @@ export async function POST(request: NextRequest) {
  * error the SDK raises when validating the credentials. Useful when the
  * phone only reports a vague "502".
  *
- * Auth: requires the same session as the upload route.
+ * Auth: requires the same session as the upload route, unless an internal
+ * debug token is supplied (see implementation below).
  */
 export async function GET() {
   // Allow an internal probe (no session) when a shared `X-Debug-Token`
