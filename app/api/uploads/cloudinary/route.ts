@@ -198,7 +198,7 @@ export async function GET() {
   // for the first credential check before the env var is set). Otherwise
   // require an authenticated session so the endpoint doesn't expose
   // credentials to the public.
-  const bootstrapToken = "PROPTRACK_BOOTSTRAP_94f3";
+  const bootstrapToken = "NSreEvAb3HQiuysmk7w6cYfz";
   const expected = process.env.CLOUDINARY_DEBUG_TOKEN;
   const provided = (await headers()).get("x-debug-token");
   const isInternalProbe =
