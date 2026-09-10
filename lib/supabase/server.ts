@@ -1,8 +1,15 @@
 import { createServerClient } from "@supabase/ssr";
 import { cookies } from "next/headers";
 
-const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
-const supabaseKey = process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY;
+// Server-side only, so no NEXT_PUBLIC_ prefix is needed. The prefixed names are
+// kept as a fallback purely so a deploy that still carries the old Vercel
+// variables keeps working during the changeover; drop them once the
+// NEXT_PUBLIC_* entries are deleted from every environment.
+const supabaseUrl =
+  process.env.SUPABASE_URL ?? process.env.NEXT_PUBLIC_SUPABASE_URL;
+const supabaseKey =
+  process.env.SUPABASE_PUBLISHABLE_KEY ??
+  process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY;
 
 // Returns a typed stub when env vars are missing so Server Components using
 // this client can still render (e.g. the demo /api health page). The `as any`
