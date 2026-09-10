@@ -1,8 +1,14 @@
 import { createServerClient } from "@supabase/ssr";
 import { type NextRequest, NextResponse } from "next/server";
 
-const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
-const supabaseKey = process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY;
+// Middleware runs on the server, so no NEXT_PUBLIC_ prefix is needed. The
+// prefixed names remain as a fallback only for the changeover window; drop them
+// once the NEXT_PUBLIC_* entries are gone from every environment.
+const supabaseUrl =
+  process.env.SUPABASE_URL ?? process.env.NEXT_PUBLIC_SUPABASE_URL;
+const supabaseKey =
+  process.env.SUPABASE_PUBLISHABLE_KEY ??
+  process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY;
 
 // Refreshes the Supabase auth cookie on every request that flows through the
 // middleware matcher. Returns the response that should be sent back so the

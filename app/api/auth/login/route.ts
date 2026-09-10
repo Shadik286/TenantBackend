@@ -3,6 +3,11 @@ import bcrypt from "bcryptjs";
 import { encode } from "next-auth/jwt";
 import type { User } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
+import {
+  RATE_LIMITS,
+  clientIp,
+  enforceRateLimit,
+} from "@/lib/rate-limit";
 
 export const runtime = "nodejs";
 
@@ -59,6 +64,20 @@ export async function POST(request: Request) {
 
   const identifier = rawIdentifier.trim();
   const looksLikeEmail = identifier.includes("@");
+
+  // Throttle before touching the database or running bcrypt. Two independent
+  // buckets: one per source IP (stops a single host spraying many accounts)
+  // and one per identifier (stops a distributed attempt on one account).
+  // Placed after parsing so we have the identifier, but before any lookup so a
+  // blocked attacker never costs us a query or a hash comparison.
+  const limited = await enforceRateLimit(
+    [
+      `login:ip:${clientIp(request)}`,
+      `login:id:${identifier.toLowerCase()}`,
+    ],
+    RATE_LIMITS.login,
+  );
+  if (limited) return limited;
 
   // Strict rule: the email branch only fires when the input looks like a real
   // email address (must contain "@" and a "." after the host). Anything else

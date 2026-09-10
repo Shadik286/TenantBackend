@@ -4,7 +4,7 @@
   "scripts": {
     "dev": "next dev",
     "dev:lan": "next dev -H 0.0.0.0",
-    "build": "next build",
+    "build": "prisma migrate deploy && next build",
     "start": "next start",
     "prisma:generate": "prisma generate",
     "prisma:validate": "prisma validate",
@@ -24,6 +24,7 @@
     "bcryptjs": "^3.0.3",
     "cloudinary": "^2.10.0",
     "decimal.js": "^10.4.3",
+    "jose": "^4.15.9",
     "next": "^15.4.2",
     "next-auth": "^4.24.14",
     "react": "^19.1.0",

@@ -4,6 +4,12 @@ import { encode } from "next-auth/jwt";
 import type { User } from "@prisma/client";
 import { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
+import { enforceBdappsSubscription } from "@/lib/bdapps";
+import {
+  RATE_LIMITS,
+  clientIp,
+  enforceRateLimit,
+} from "@/lib/rate-limit";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -89,9 +95,40 @@ export async function POST(request: Request) {
     );
   }
 
-  // 1) Look up an existing user by phone, or create one with the PRO plan.
+  // This endpoint mints a 30-day session from a phone number alone (SEC-001),
+  // so until that is fixed properly the rate limit is the only thing standing
+  // between an attacker and walking the phone-number space. Two buckets: per
+  // source IP, and per phone number so a botnet cannot grind one target.
+  const limited = await enforceRateLimit(
+    [
+      `bdapps:ip:${clientIp(request)}`,
+      `bdapps:phone:${normalizedPhone}`,
+    ],
+    RATE_LIMITS.bdappsLogin,
+  );
+  if (limited) return limited;
+
+  // Independently confirm with the gateway that this number is a real
+  // subscriber, rather than trusting the caller. Runs in log-only mode until
+  // BDAPPS_VERIFY_MODE=enforce — see lib/bdapps.ts for why.
+  const subscriptionRejection = await enforceBdappsSubscription(normalizedPhone);
+  if (subscriptionRejection) {
+    return NextResponse.json(
+      { error: "NOT_SUBSCRIBED", message: subscriptionRejection },
+      { status: 403 }
+    );
+  }
+
+  // 1) Look up an existing bdapps user by phone, or create one with the PRO plan.
+  //
+  // 🔒 SEC-001: the `provider` filter is the security boundary. Without it this
+  // lookup matches ANY user who happens to have this phone number on file —
+  // including email/password and Google accounts — so a phone number, which is
+  // printed on every rental agreement, would be a master key to their account.
+  // Scoped this way, only accounts created through the bdapps flow are
+  // reachable here.
   let user: User | null = await prisma.user.findFirst({
-    where: { phone: normalizedPhone },
+    where: { phone: normalizedPhone, provider: "bdapps" },
   });
 
   if (!user) {
@@ -122,6 +159,13 @@ export async function POST(request: Request) {
             password_hash: passwordHash,
             full_name: displayName,
             phone: normalizedPhone,
+            // Must be set here, or the account this route just created is
+            // invisible to the scoped lookup above on the user's next login —
+            // producing a fresh empty account every single time.
+            provider: "bdapps",
+            // The carrier gateway ran OTP before this request reached us, so
+            // this number is genuinely proven — unlike a typed one.
+            phone_verified: true,
           },
         });
 
@@ -163,12 +207,41 @@ export async function POST(request: Request) {
         err instanceof Prisma.PrismaClientKnownRequestError &&
         err.code === "P2002"
       ) {
-        // A concurrent request just created the user (typically on
-        // `users.email` or `users.phone`) — re-read it and continue.
+        // A concurrent request may have just created the user — re-read it,
+        // scoped the same way as the primary lookup.
         user = await prisma.user.findFirst({
-          where: { phone: normalizedPhone },
+          where: { phone: normalizedPhone, provider: "bdapps" },
         });
+
         if (!user) {
+          // Not a race. The unique constraint on `phone` fired because the
+          // number already belongs to an account created through a DIFFERENT
+          // flow (email/password or Google).
+          //
+          // This is SEC-001 being enforced, and it is the expected outcome of
+          // the takeover attempt: we refuse rather than handing over a session.
+          // Distinguished from a genuine race so it returns an honest 409
+          // instead of a 500 that reads like a server bug.
+          const otherProvider = await prisma.user.findFirst({
+            where: { phone: normalizedPhone },
+            select: { provider: true },
+          });
+
+          if (otherProvider) {
+            console.warn("[bdapps/login] refused: phone owned by another provider", {
+              phone_suffix: normalizedPhone.slice(-4),
+              owner_provider: otherProvider.provider,
+            });
+            return NextResponse.json(
+              {
+                error: "PHONE_REGISTERED_ELSEWHERE",
+                message:
+                  "This number is already linked to an account that signs in a different way. Please use your original sign-in method.",
+              },
+              { status: 409 }
+            );
+          }
+
           return NextResponse.json(
             {
               error: "Could not finalize bdapps registration.",

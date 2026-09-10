@@ -13,3 +13,6 @@ tsconfig.tsbuildinfo
 
 # Local redirect/capture logs from one-off `npm run` invocations
 scripts/*-out.txt
+.vercel
+.env*
+_debug_token.txt
