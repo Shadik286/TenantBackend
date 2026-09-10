@@ -34,6 +34,36 @@ model User {
   updated_at    DateTime  @updatedAt
   deleted_at    DateTime?
 
+  /// Which flow created this account: "bdapps" (phone + carrier gateway),
+  /// "google" (Play Store build), or "local" (email + password).
+  ///
+  /// This is a security boundary, not bookkeeping. `/api/auth/bdapps/login`
+  /// mints a session from a phone number alone, so without this column that
+  /// route can reach ANY user who happens to have a phone number on file —
+  /// including email/password and Google accounts. Scoping the lookup to
+  /// `provider = "bdapps"` is what stops a phone number being a master key
+  /// to the whole user table. See SECURITY_ISSUES.md SEC-001.
+  provider      String    @default("local")
+
+  /// Google's stable subject identifier (the `sub` claim). Preferred over
+  /// email for matching returning Google users: `sub` never changes, whereas
+  /// a Workspace email can be renamed or reassigned to a different person —
+  /// which would silently hand them the previous owner's account.
+  google_sub    String?   @unique
+
+  /// Whether ownership of `phone` has actually been proven.
+  ///
+  /// true  — bdapps accounts: the carrier gateway ran OTP before we ever saw
+  ///         the number.
+  /// false — Google/local accounts: the user typed it and nobody checked.
+  ///
+  /// No OTP flow exists for non-bdapps users yet (a deliberate scoping call —
+  /// it needs an SMS vendor). This column is the seam that makes adding one
+  /// later a migration-free change, and it lets F4 decide whether an
+  /// unverified number may claim a paid subscription. Uniqueness on `phone`
+  /// already prevents claiming a number somebody else has registered.
+  phone_verified Boolean  @default(false)
+
   subscription Subscription?
   houses       House[]
   audit_logs   AuditLog[]    @relation("AuditActor")
@@ -41,6 +71,7 @@ model User {
 
   @@index([email])
   @@index([is_active, deleted_at])
+  @@index([provider, phone])
 }
 
 model UserPreference {

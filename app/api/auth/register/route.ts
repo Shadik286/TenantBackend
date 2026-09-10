@@ -139,6 +139,11 @@ async function handleRegister(request: Request) {
           password_hash: passwordHash,
           full_name: fullName,
           phone: normalizedPhone,
+          // Explicit rather than relying on the column default, so the intent
+          // is visible at the call site. 'local' accounts are deliberately
+          // unreachable from /api/auth/bdapps/login (SEC-001) — which is the
+          // whole point: a phone number here must not grant a session.
+          provider: "local",
         },
       });
 
