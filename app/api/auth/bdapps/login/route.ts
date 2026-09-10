@@ -4,6 +4,11 @@ import { encode } from "next-auth/jwt";
 import type { User } from "@prisma/client";
 import { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
+import {
+  RATE_LIMITS,
+  clientIp,
+  enforceRateLimit,
+} from "@/lib/rate-limit";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -88,6 +93,19 @@ export async function POST(request: Request) {
       { status: 400 }
     );
   }
+
+  // This endpoint mints a 30-day session from a phone number alone (SEC-001),
+  // so until that is fixed properly the rate limit is the only thing standing
+  // between an attacker and walking the phone-number space. Two buckets: per
+  // source IP, and per phone number so a botnet cannot grind one target.
+  const limited = await enforceRateLimit(
+    [
+      `bdapps:ip:${clientIp(request)}`,
+      `bdapps:phone:${normalizedPhone}`,
+    ],
+    RATE_LIMITS.bdappsLogin,
+  );
+  if (limited) return limited;
 
   // 1) Look up an existing user by phone, or create one with the PRO plan.
   let user: User | null = await prisma.user.findFirst({

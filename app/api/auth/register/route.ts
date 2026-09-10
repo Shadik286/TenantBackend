@@ -2,6 +2,11 @@ import { NextResponse } from "next/server";
 import bcrypt from "bcryptjs";
 import { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
+import {
+  RATE_LIMITS,
+  clientIp,
+  enforceRateLimit,
+} from "@/lib/rate-limit";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -37,6 +42,15 @@ export async function POST(request: Request) {
 }
 
 async function handleRegister(request: Request) {
+  // Per-IP only: there is no pre-existing account to key on, and the whole
+  // point is to stop one host creating many. 3/hour is generous for a real
+  // person and ruinous for a script filling the 500 MB Supabase free tier.
+  const limited = await enforceRateLimit(
+    [`register:ip:${clientIp(request)}`],
+    RATE_LIMITS.register,
+  );
+  if (limited) return limited;
+
   const body = await request.json();
   const { email, password, fullName, phone } = body as {
     email?: string;
