@@ -53,11 +53,22 @@ export const RATE_LIMITS = {
    */
   bdappsLogin: { limit: 5, windowSeconds: 15 * 60 },
   /**
-   * Google login. Looser than password login because the caller must already
-   * hold a Google-signed ID token, but still capped: verifying a token costs
-   * a JWKS lookup and a signature check.
+   * Google login, pre-verification gate. Keyed on IP, so it must tolerate
+   * carrier-grade NAT: a mobile network puts thousands of subscribers behind
+   * one address, and the Flutter app is exactly that traffic. This bucket
+   * exists only to cap the CPU an unauthenticated caller can burn on a JWKS
+   * lookup and a signature check — it is not the brute-force defence, so it
+   * is set well above anything a shared exit node produces legitimately.
+   * The real per-account throttle is `googleLoginSubject` below.
    */
-  googleLogin: { limit: 10, windowSeconds: 15 * 60 },
+  googleLogin: { limit: 60, windowSeconds: 15 * 60 },
+  /**
+   * Google login, post-verification. Keyed on the token's `sub` claim, which
+   * Google signed, so a caller cannot pick their own bucket. This is the
+   * bucket that actually limits one account's attempts, and it can be tight
+   * because it is immune to NAT.
+   */
+  googleLoginSubject: { limit: 10, windowSeconds: 15 * 60 },
   /** Cloudinary uploads — 5 MB each, so this protects a paid quota. */
   upload: { limit: 20, windowSeconds: 60 * 60 },
 } as const satisfies Record<string, RateLimitRule>;

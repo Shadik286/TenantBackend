@@ -109,7 +109,10 @@ export async function POST(request: Request) {
   // Per-IP only: we have no trustworthy identifier until the token is verified,
   // and keying on an unverified claim would let an attacker choose their own
   // bucket. Verification costs a JWKS lookup plus a signature check, so this
-  // caps the CPU an unauthenticated caller can burn.
+  // caps the CPU an unauthenticated caller can burn. Deliberately generous —
+  // every subscriber on a mobile carrier shares one public address, so a tight
+  // bucket here locks out real users rather than attackers. The per-account
+  // limit further down is the one that does the real work.
   const limited = await enforceRateLimit(
     [`google:ip:${clientIp(request)}`],
     RATE_LIMITS.googleLogin,
@@ -169,6 +172,15 @@ export async function POST(request: Request) {
       { status: 400 },
     );
   }
+
+  // Second gate, now that Google's signature has vouched for `sub`. This is
+  // the bucket that actually throttles one account, and unlike the IP gate
+  // above it cannot be diluted by NAT or chosen by the caller.
+  const subjectLimited = await enforceRateLimit(
+    [`google:sub:${googleSub}`],
+    RATE_LIMITS.googleLoginSubject,
+  );
+  if (subjectLimited) return subjectLimited;
 
   // Find or create the local user.
   //
