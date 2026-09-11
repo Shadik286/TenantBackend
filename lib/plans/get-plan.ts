@@ -1,6 +1,51 @@
+import type { Plan } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
 
 export const UNLIMITED_SENTINEL = 2_147_483_647; // Int32.MAX
+
+/**
+ * In-process cache of the Plan rows.
+ *
+ * WHY: every route that checks a limit called getPlanForOwner(), which fetched
+ * the FREE row — and sometimes the PRO row — on every single request. Against
+ * Supabase's pooler each query costs ~260ms REGARDLESS of region (measured: a
+ * bare `SELECT 1` on an already-open connection takes 261ms on the transaction
+ * pooler and 279ms on the session pooler). So these lookups were ~500ms of
+ * every response, for two rows that change approximately never.
+ *
+ * Plans are configuration, not user data: two rows, edited by hand or by
+ * `npm run db:seed`. A stale read for at most 5 minutes is harmless — the
+ * worst case is a limit change taking five minutes to take effect — whereas
+ * re-reading them per request is the single largest avoidable cost in the API.
+ *
+ * Scope is one lambda instance, so it warms per instance and dies with it.
+ * No invalidation needed beyond the TTL; if a plan edit must apply instantly,
+ * redeploy.
+ */
+const PLAN_CACHE_TTL_MS = 5 * 60 * 1000;
+
+let planCache: { plans: Map<string, Plan>; expiresAt: number } | null = null;
+
+async function loadPlans(): Promise<Map<string, Plan>> {
+  const now = Date.now();
+  if (planCache && planCache.expiresAt > now) return planCache.plans;
+
+  // One query for every active plan, instead of one per name per request.
+  const rows = await prisma.plan.findMany({ where: { is_active: true } });
+  const plans = new Map(rows.map((p) => [p.name, p]));
+  planCache = { plans, expiresAt: now + PLAN_CACHE_TTL_MS };
+  return plans;
+}
+
+/** Cached lookup by plan name ("FREE" / "PRO"). */
+async function planByName(name: string): Promise<Plan | null> {
+  return (await loadPlans()).get(name) ?? null;
+}
+
+/** Drop the cache — for tests, or after editing plan rows in the same process. */
+export function invalidatePlanCache(): void {
+  planCache = null;
+}
 
 export type OwnerPlan = {
   planName: string;
@@ -57,11 +102,24 @@ export async function activeCouponEntitlement(
  *      finish) or it is broken.
  */
 export async function getPlanForOwner(ownerId: string): Promise<OwnerPlan> {
-  const coupon = await activeCouponEntitlement(ownerId);
+  // The two user-specific lookups are independent of each other, so they go in
+  // parallel rather than one after the other. The plan rows come from the
+  // in-process cache and usually cost no query at all.
+  //
+  // Before: coupon -> subscription -> FREE plan, strictly sequential, roughly
+  // 780ms at ~260ms per query. After: one round trip, plus a cache hit.
+  const [coupon, subscription, plans] = await Promise.all([
+    activeCouponEntitlement(ownerId),
+    prisma.subscription.findFirst({
+      where: { user_id: ownerId },
+      orderBy: { created_at: "desc" },
+      include: { plan: true },
+    }),
+    loadPlans(),
+  ]);
+
   if (coupon) {
-    const proPlan = await prisma.plan.findFirst({
-      where: { name: "PRO", is_active: true },
-    });
+    const proPlan = plans.get("PRO") ?? null;
     if (proPlan) {
       return {
         planName: proPlan.name,
@@ -85,16 +143,8 @@ export async function getPlanForOwner(ownerId: string): Promise<OwnerPlan> {
     // break every request they make.
   }
 
-  const subscription = await prisma.subscription.findFirst({
-    where: { user_id: ownerId },
-    orderBy: { created_at: "desc" },
-    include: { plan: true },
-  });
-
-  // Try to find a FREE plan if no subscription OR subscription is broken
-  const freePlan = await prisma.plan.findFirst({
-    where: { name: "FREE", is_active: true },
-  });
+  // Both already resolved above — no further queries on this path.
+  const freePlan = plans.get("FREE") ?? null;
 
   if (!subscription || !subscription.plan) {
     if (!freePlan) {
@@ -136,9 +186,9 @@ export async function getPlanForOwner(ownerId: string): Promise<OwnerPlan> {
 }
 
 export async function getDefaultFreePlanId(): Promise<string> {
-  const freePlan = await prisma.plan.findFirst({
-    where: { name: "FREE", is_active: true },
-  });
+  // Cached: this runs on the registration path, where it used to add a full
+  // query for a row that is already in memory on any warm instance.
+  const freePlan = await planByName("FREE");
   if (!freePlan) {
     throw new Error("FREE plan not found in database. Run `npm run db:seed`.");
   }
