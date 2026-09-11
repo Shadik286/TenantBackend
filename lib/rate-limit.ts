@@ -71,6 +71,24 @@ export const RATE_LIMITS = {
   googleLoginSubject: { limit: 10, windowSeconds: 15 * 60 },
   /** Cloudinary uploads — 5 MB each, so this protects a paid quota. */
   upload: { limit: 20, windowSeconds: 60 * 60 },
+  /**
+   * Refresh-token exchange. Not a brute-force surface — the token is 256
+   * bits — so this only bounds the database work an anonymous caller can
+   * provoke. Generous because it is keyed on IP and a mobile carrier puts
+   * thousands of subscribers behind one, each refreshing about hourly.
+   */
+  tokenRefresh: { limit: 300, windowSeconds: 15 * 60 },
+  /**
+   * Coupon redemption. Hard limit, and the tightest one here.
+   *
+   * A coupon namespace is enumerable in a way a token is not — codes are
+   * short enough to type — and a hit grants PRO for free. Five attempts an
+   * hour makes walking the space hopeless while leaving room for a user who
+   * fat-fingers a code off a flyer a few times. Applied per USER, not per IP,
+   * because the endpoint requires a session: an attacker would have to farm
+   * accounts to widen it, and every attempt is attributable.
+   */
+  couponRedeem: { limit: 5, windowSeconds: 60 * 60 },
 } as const satisfies Record<string, RateLimitRule>;
 
 export type RateLimitResult = {
@@ -220,12 +238,74 @@ export async function enforceRateLimit(
   keys: string[],
   rule: RateLimitRule,
 ): Promise<NextResponse | null> {
-  for (const key of keys) {
-    const result = await checkRateLimit(key, rule);
-    if (!result.allowed) {
-      console.warn("[rate-limit] blocked", { key, rule });
-      return tooManyRequests(result.retryAfterSeconds);
+  if (keys.length === 0) return null;
+
+  const now = Date.now();
+  const windowStart = new Date(now - rule.windowSeconds * 1000);
+
+  try {
+    // ONE round trip to count every key, instead of one per key.
+    //
+    // This used to loop `checkRateLimit` per key, costing 2 round trips each.
+    // On /api/auth/login — which limits per-IP AND per-identifier — that was 4
+    // round trips before the handler even looked up the user. Against a
+    // database in another region that is most of a second, paid by every
+    // login attempt including the legitimate ones.
+    //
+    // `connection_limit=1` is why `Promise.all` would not have helped: Prisma
+    // serialises queries onto the single connection regardless. The only real
+    // fix is fewer queries, not more concurrency.
+    const counts = await prisma.rateLimitToken.groupBy({
+      by: ["key"],
+      where: { key: { in: keys }, created_at: { gte: windowStart } },
+      _count: { _all: true },
+    });
+
+    const used = new Map(counts.map((c) => [c.key, c._count._all]));
+    const exceeded = keys.find((k) => (used.get(k) ?? 0) >= rule.limit);
+
+    if (exceeded) {
+      // Only on the deny path do we pay for a second query, to say honestly
+      // when a slot frees up. Denials are rare, so the cost sits where it
+      // does the least harm.
+      const oldest = await prisma.rateLimitToken.findFirst({
+        where: { key: exceeded, created_at: { gte: windowStart } },
+        orderBy: { created_at: "asc" },
+        select: { created_at: true },
+      });
+      const freesAt = oldest
+        ? oldest.created_at.getTime() + rule.windowSeconds * 1000
+        : now + rule.windowSeconds * 1000;
+
+      console.warn("[rate-limit] blocked", { key: exceeded, rule });
+      return tooManyRequests(
+        Math.max(1, Math.ceil((freesAt - now) / 1000)),
+      );
     }
+
+    // ONE round trip to record every key.
+    await prisma.rateLimitToken.createMany({
+      data: keys.map((key) => ({ key })),
+    });
+
+    // Pruning is housekeeping, so it should not be on the hot path at all.
+    // Running it ~5% of the time keeps the table bounded without adding a
+    // query to every single request — there is no cron in this project to do
+    // it out of band.
+    if (Math.random() < 0.05) {
+      prisma.rateLimitToken
+        .deleteMany({ where: { key: { in: keys }, created_at: { lt: windowStart } } })
+        .catch(() => {});
+    }
+
+    return null;
+  } catch (err) {
+    // Fail open, exactly as the per-key path does: a limiter fault must never
+    // lock users out of their own accounts.
+    console.error("[rate-limit] enforce failed, allowing request", {
+      keys,
+      error: err instanceof Error ? err.message : String(err),
+    });
+    return null;
   }
-  return null;
 }
