@@ -1,30 +1,4 @@
 {
   "$schema": "https://openapi.vercel.sh/vercel.json",
-
-  "_comment_region": [
-    "THE SINGLE BIGGEST PERFORMANCE FIX IN THIS PROJECT.",
-    "",
-    "Without this, Vercel defaults functions to iad1 (Washington DC) while the",
-    "Supabase database sits in ap-southeast-1 (Singapore) — about 15,000 km and",
-    "~230ms of round-trip latency apart. Every Prisma query pays that toll, and",
-    "connection_limit=1 means they run strictly one after another:",
-    "",
-    "  /api/auth/login    6 round trips  ->  ~1.4s of pure network wait",
-    "  /api/tenants       9 round trips  ->  ~2.1s",
-    "  /api/payments     11 round trips  ->  ~2.5s",
-    "",
-    "Measured before the change: /api/health, which runs a single SELECT 1,",
-    "took 1.6-1.7s of server time. The query is trivial; the distance is not.",
-    "",
-    "sin1 (Singapore) puts functions in the same region as the database, cutting",
-    "each round trip from ~230ms to single-digit milliseconds. It is also far",
-    "closer to users in Bangladesh than Washington DC.",
-    "",
-    "IF THE PRODUCTION DATABASE MOVES, CHANGE THIS. Production currently sits in",
-    "ap-northeast-1 (Tokyo), so functions in sin1 still pay ~70ms per query",
-    "there. Co-locating both in ap-southeast-1 is the tidier end state; region",
-    "must always follow the database, not the users, because one request makes",
-    "many database round trips and only one trip to the user."
-  ],
   "regions": ["sin1"]
 }
