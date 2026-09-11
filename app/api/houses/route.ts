@@ -1,37 +1,22 @@
 import { NextRequest, NextResponse } from "next/server";
 import { requireUserId } from "@/lib/require-user";
 import { prisma } from "@/lib/prisma";
+import { getPlanForOwner } from "@/lib/plans/get-plan";
 
 export const runtime = "nodejs";
 
-const UNLIMITED_PLAN_MARKER = 2_147_483_647;
-
-// Fetches the caller's active plan limits. Returns null if no subscription is
-// attached (treat the account as FREE with the default 2-house limit).
-// Runs the subscription lookup AND the FREE-plan fallback lookup in
-// parallel so a missing subscription doesn't cost an extra round trip.
-async function getPlanForOwner(ownerId: string) {
-  const [subscription, freePlan] = await Promise.all([
-    prisma.subscription.findUnique({
-      where: { user_id: ownerId },
-      include: { plan: true },
-    }),
-    prisma.plan.findUnique({ where: { name: "FREE" } }),
-  ]);
-  if (!subscription) {
-    return freePlan
-      ? { plan: freePlan, status: "ACTIVE" as const }
-      : null;
-  }
-  return subscription;
-}
+// The plan lookup lives in `lib/plans/get-plan.ts` and is shared with the
+// units and tenants routes. This file used to carry its own copy that
+// defaulted a missing FREE plan to 2 houses; the shared helper throws
+// instead, so a database that was never seeded fails loudly rather than
+// silently handing every user a limit nobody configured.
 
 export async function GET(request: NextRequest) {
   const guard = await requireUserId();
   if ("response" in guard) return guard.response;
   const ownerId = guard.userId;
 
-  const [houses, sub] = await Promise.all([
+  const [houses, plan] = await Promise.all([
     prisma.house.findMany({
       where: { owner_id: ownerId, deleted_at: null },
       orderBy: { created_at: "desc" },
@@ -51,17 +36,18 @@ export async function GET(request: NextRequest) {
     getPlanForOwner(ownerId),
   ]);
 
-  const maxHouses = sub?.plan.max_houses ?? 2;
-  const isUnlimited = maxHouses >= UNLIMITED_PLAN_MARKER;
+  const isUnlimited = plan.isUnlimitedHouses;
 
   return NextResponse.json({
     data: houses,
     plan: {
-      name: sub?.plan.name ?? "FREE",
-      max_houses: isUnlimited ? null : maxHouses,
+      name: plan.planName,
+      max_houses: isUnlimited ? null : plan.maxHouses,
       is_unlimited: isUnlimited,
       used: houses.length,
-      remaining: isUnlimited ? null : Math.max(0, maxHouses - houses.length),
+      remaining: isUnlimited
+        ? null
+        : Math.max(0, plan.maxHouses - houses.length),
     },
   });
 }
@@ -96,22 +82,29 @@ export async function POST(request: NextRequest) {
 
   // Plan-limit check before insert. Soft-deleted houses do NOT count against
   // the limit, matching the architecture's free-tier rule.
-  const [activeCount, sub] = await Promise.all([
+  const [activeCount, plan] = await Promise.all([
     prisma.house.count({ where: { owner_id: ownerId, deleted_at: null } }),
     getPlanForOwner(ownerId),
   ]);
 
-  const maxHouses = sub?.plan.max_houses ?? 2;
-  const isUnlimited = maxHouses >= UNLIMITED_PLAN_MARKER;
-
-  if (!isUnlimited && activeCount >= maxHouses) {
+  if (!plan.isUnlimitedHouses && activeCount >= plan.maxHouses) {
     return NextResponse.json(
       {
         error: "HOUSE_LIMIT_REACHED",
-        message: `Your ${sub?.plan.name ?? "FREE"} plan allows up to ${maxHouses} active houses.`,
-        limit: maxHouses,
+        code: "HOUSE_LIMIT_REACHED",
+        message:
+          `Your ${plan.planName} plan allows up to ${plan.maxHouses} active ` +
+          `${plan.maxHouses === 1 ? "house" : "houses"}. ` +
+          `Upgrade to PRO for unlimited houses.`,
+        limit: plan.maxHouses,
         current: activeCount,
-        plan: sub?.plan.name ?? "FREE",
+        plan: plan.planName,
+        details: {
+          plan_name: plan.planName,
+          max_houses: plan.maxHouses,
+          current_active_houses: activeCount,
+          upgrade_url: "/billing/upgrade",
+        },
       },
       { status: 403 }
     );

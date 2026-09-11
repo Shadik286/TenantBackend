@@ -10,18 +10,24 @@
 --   "FREE plan is missing. Run `npm run db:seed` before registering users."
 --
 -- IMPORTANT: keep the JSONB `features` shape in sync with prisma/seed.ts.
+--
+-- F3 targets: FREE = 1 house / 3 units per house / 3 tenants / 30-day trial.
+-- PRO uses the Int32.MAX sentinel (2147483647) for every cap.
 
 INSERT INTO "public"."Plan" (
-  "id", "name", "max_houses", "max_units_per_house",
-  "price_monthly", "features", "is_active", "created_at", "updated_at"
+  "id", "name", "max_houses", "max_units_per_house", "max_tenants",
+  "trial_days", "price_monthly", "features", "is_active",
+  "created_at", "updated_at"
 ) VALUES
   (
     'plan_free_seed_0000000000000',
     'FREE',
-    2,
-    5,
+    1,
+    3,
+    3,
+    30,
     0,
-    '{"max_houses": 2, "max_units_per_house": 5, "reports": false, "attachments": true}'::jsonb,
+    '{"max_houses": 1, "max_units_per_house": 3, "max_tenants": 3, "trial_days": 30, "reports": false, "attachments": true}'::jsonb,
     true,
     CURRENT_TIMESTAMP,
     CURRENT_TIMESTAMP
@@ -31,8 +37,10 @@ INSERT INTO "public"."Plan" (
     'PRO',
     2147483647,
     2147483647,
+    2147483647,
+    30,
     29.00,
-    '{"max_houses": "unlimited", "max_units_per_house": "unlimited", "reports": true, "attachments": true}'::jsonb,
+    '{"max_houses": "unlimited", "max_units_per_house": "unlimited", "max_tenants": "unlimited", "trial_days": 30, "reports": true, "attachments": true}'::jsonb,
     true,
     CURRENT_TIMESTAMP,
     CURRENT_TIMESTAMP
@@ -40,6 +48,8 @@ INSERT INTO "public"."Plan" (
 ON CONFLICT ("name") DO UPDATE SET
   "max_houses"          = EXCLUDED."max_houses",
   "max_units_per_house" = EXCLUDED."max_units_per_house",
+  "max_tenants"         = EXCLUDED."max_tenants",
+  "trial_days"          = EXCLUDED."trial_days",
   "price_monthly"       = EXCLUDED."price_monthly",
   "features"            = EXCLUDED."features",
   "is_active"           = EXCLUDED."is_active",

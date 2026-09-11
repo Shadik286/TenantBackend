@@ -11,6 +11,7 @@
     "prisma:migrate": "prisma migrate dev",
     "prisma:studio": "prisma studio",
     "db:seed": "tsx prisma/seed.ts",
+    "coupons": "tsx scripts/coupons.ts",
     "db:reset": "tsx scripts/reset-db.ts",
     "debug:login": "tsx scripts/debug-login.ts",
     "postinstall": "prisma generate"
@@ -21,12 +22,14 @@
     "@supabase/ssr": "^0.5.0",
     "@supabase/supabase-js": "^2.45.0",
     "@types/bcryptjs": "^2.4.6",
+    "@types/nodemailer": "^8.0.1",
     "bcryptjs": "^3.0.3",
     "cloudinary": "^2.10.0",
     "decimal.js": "^10.4.3",
     "jose": "^4.15.9",
     "next": "^15.4.2",
     "next-auth": "^4.24.14",
+    "nodemailer": "^7.0.13",
     "react": "^19.1.0",
     "react-dom": "^19.1.0",
     "zod": "^4.4.3"

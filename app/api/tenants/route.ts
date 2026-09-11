@@ -1,6 +1,8 @@
 import { NextRequest, NextResponse } from "next/server";
 import { requireUserId } from "@/lib/require-user";
 import { prisma } from "@/lib/prisma";
+import { notifyLeaseAssignment } from "@/lib/notifications";
+import { getPlanForOwner } from "@/lib/plans/get-plan";
 
 export const runtime = "nodejs";
 
@@ -78,6 +80,11 @@ export async function GET(request: NextRequest) {
   const tenants = await prisma.tenant.findMany({
     where: {
       owner_id: ownerId,
+      // Soft-deleted tenants are gone as far as every caller is concerned.
+      // DELETE /api/tenants/[tenantId] only stamps `deleted_at`, and without
+      // this filter they kept showing up in the list — and would have
+      // disagreed with the `plan.used` count below, which excludes them.
+      deleted_at: null,
       ...(houseId
         ? {
             leases: {
@@ -128,8 +135,26 @@ export async function GET(request: NextRequest) {
     },
   });
 
+  // Plan block mirrors GET /api/houses so the client can render "2 of 3
+  // used" and pre-disable Add Tenant without waiting for a 403. Counted
+  // separately from `tenants` above because that list can be narrowed by
+  // `houseId`, while the cap spans every house the owner has.
+  const [plan, activeTenantCount] = await Promise.all([
+    getPlanForOwner(ownerId),
+    prisma.tenant.count({ where: { owner_id: ownerId, deleted_at: null } }),
+  ]);
+
   return NextResponse.json({
     data: tenants.map(serializeTenant),
+    plan: {
+      name: plan.planName,
+      max_tenants: plan.isUnlimitedTenants ? null : plan.maxTenants,
+      is_unlimited: plan.isUnlimitedTenants,
+      used: activeTenantCount,
+      remaining: plan.isUnlimitedTenants
+        ? null
+        : Math.max(0, plan.maxTenants - activeTenantCount),
+    },
   });
 }
 
@@ -185,6 +210,40 @@ export async function POST(request: NextRequest) {
     return NextResponse.json(
       { error: "fullName is required." },
       { status: 400 },
+    );
+  }
+
+  // Plan-limit check before the insert. Unlike units, which are capped per
+  // house, this counts every active tenant the owner has across all houses —
+  // otherwise a FREE owner could sidestep the cap by spreading tenants out.
+  // Soft-deleted tenants don't count, matching houses and units.
+  //
+  // This runs before the transaction rather than inside it: an owner racing
+  // two creates could squeeze past by one, which is the same benign race the
+  // house and unit checks accept. Serialising it would cost a held
+  // connection on every tenant create to prevent an off-by-one in a limit
+  // the user can lift by upgrading.
+  const [plan, activeTenantCount] = await Promise.all([
+    getPlanForOwner(ownerId),
+    prisma.tenant.count({ where: { owner_id: ownerId, deleted_at: null } }),
+  ]);
+
+  if (!plan.isUnlimitedTenants && activeTenantCount >= plan.maxTenants) {
+    return NextResponse.json(
+      {
+        error: "TENANT_LIMIT_REACHED",
+        code: "TENANT_LIMIT_REACHED",
+        message:
+          `Your ${plan.planName} plan allows up to ${plan.maxTenants} tenants. ` +
+          `Upgrade to PRO for unlimited tenants.`,
+        details: {
+          plan_name: plan.planName,
+          max_tenants: plan.maxTenants,
+          current_active_tenants: activeTenantCount,
+          upgrade_url: "/billing/upgrade",
+        },
+      },
+      { status: 403 },
     );
   }
 
@@ -275,6 +334,25 @@ export async function POST(request: NextRequest) {
       },
     });
   });
+
+  // Assignment notice — path 2 of 3, and the busiest: onboarding creates the
+  // tenant and their lease in one call. Fires only when a lease was actually
+  // created, since this route also serves tenants added without a unit.
+  //
+  // Sent AFTER the transaction commits, deliberately. Notifying from inside
+  // would mail the tenant even if the transaction later rolled back.
+  const newLease = result?.leases?.[0];
+  if (newLease) {
+    await notifyLeaseAssignment({
+      landlordUserId: ownerId,
+      leaseId: newLease.id,
+      houseId: newLease.house_id,
+      unitId: newLease.unit_id,
+      tenantId: result.id,
+      moveInDate: newLease.move_in_date,
+      securityDeposit: newLease.security_deposit?.toFixed(2) ?? null,
+    });
+  }
 
   return NextResponse.json({ data: serializeTenant(result) }, { status: 201 });
 }

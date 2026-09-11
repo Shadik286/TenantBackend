@@ -4,6 +4,10 @@ import { Prisma } from "@prisma/client";
 import { requireUserId } from "@/lib/require-user";
 import { prisma } from "@/lib/prisma";
 import { invalidateReportSnapshotsForHouse } from "@/lib/report-cache";
+import {
+  notifyTenant,
+  paymentReceiptDedupeKey,
+} from "@/lib/notifications";
 
 export const runtime = "nodejs";
 
@@ -399,7 +403,11 @@ export async function POST(request: NextRequest) {
         },
       });
       if (existing) {
-        return existing;
+        // `wasCreated: false` is what stops a retried request mailing the
+        // tenant a second invoice. Without this flag the caller cannot tell an
+        // idempotent replay from a genuine new payment — both return a Payment
+        // row that looks identical.
+        return { payment: existing, wasCreated: false as const };
       }
 
       const created = await tx.payment.create({
@@ -439,7 +447,17 @@ export async function POST(request: NextRequest) {
         data: { status: nextStatus },
       });
 
-      return created;
+      // Carry the already-computed totals out for the receipt. These are exact
+      // as of this transaction; recomputing them afterwards would race with a
+      // concurrent payment on the same charge and could tell the tenant a
+      // balance that was never true.
+      return {
+        payment: created,
+        wasCreated: true as const,
+        paidTotal: paid,
+        amountDue: charge.amount_due,
+        chargeStatus: nextStatus,
+      };
     });
 
     // Payment totals feed both the monthly and yearly reports. Invalidate
@@ -455,7 +473,44 @@ export async function POST(request: NextRequest) {
       yearKey: invalidateYearKey,
     });
 
-    return NextResponse.json({ data: serializePayment(result) }, { status: 201 });
+    // Receipt to the tenant — only on a genuine creation, never on an
+    // idempotent replay, and only when we actually have an address.
+    if (result.wasCreated) {
+      const rc = result.payment.rent_charge;
+      const remaining = result.amountDue.sub(result.paidTotal);
+      await notifyTenant({
+        landlordUserId: ownerId,
+        recipient: {
+          tenantId: rc.tenant_id,
+          tenantName: rc.tenant?.full_name ?? "",
+          email: rc.tenant?.email ?? null,
+        },
+        payload: {
+          kind: "PAYMENT_RECEIPT",
+          amountPaid: result.payment.amount.toFixed(2),
+          datePaid: result.payment.date_paid,
+          method: result.payment.method,
+          dueMonth: rc.due_month,
+          amountDue: result.amountDue.toFixed(2),
+          totalPaid: result.paidTotal.toFixed(2),
+          // Floored: an overpayment must not render as a negative balance.
+          remaining: (remaining.isNegative()
+            ? new Prisma.Decimal(0)
+            : remaining
+          ).toFixed(2),
+          status: result.chargeStatus,
+          houseName: rc.house?.name ?? "",
+          unitName: rc.unit?.name ?? "",
+          referenceNo: result.payment.reference_no ?? null,
+        },
+        dedupeKey: paymentReceiptDedupeKey(result.payment.id),
+      });
+    }
+
+    return NextResponse.json(
+      { data: serializePayment(result.payment) },
+      { status: 201 },
+    );
   } catch (e) {
     const message = e instanceof Error ? e.message : "Unknown error";
     return NextResponse.json(

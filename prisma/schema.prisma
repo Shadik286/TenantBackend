@@ -13,6 +13,14 @@ model Plan {
   name                String   @unique
   max_houses          Int
   max_units_per_house Int      @default(5)
+  // Cap on active (non-soft-deleted) tenants across ALL of the owner's
+  // houses — unlike max_units_per_house, which is per house. PRO stores
+  // the Int32.MAX sentinel here, same convention as the other two caps.
+  max_tenants         Int      @default(3)
+  // Length of the trial window handed to a new user on this plan. Read at
+  // registration instead of a hard-coded constant so changing the trial is
+  // a data change, not a deploy.
+  trial_days          Int      @default(30)
   price_monthly       Decimal  @db.Decimal(14, 2)
   features            Json
   is_active           Boolean  @default(true)
@@ -33,6 +41,30 @@ model User {
   created_at    DateTime  @default(now())
   updated_at    DateTime  @updatedAt
   deleted_at    DateTime?
+
+  /// bcrypt hash of the user's 6-digit unlock PIN.
+  ///
+  /// The PIN is NOT a remote credential and this column is never accepted as
+  /// proof of identity on its own — six digits is 10^6 combinations, which a
+  /// server-side check would let an attacker walk through. The PIN is
+  /// verified on the device, against a hash in the platform keystore, and
+  /// what it actually unlocks is the stored refresh token.
+  ///
+  /// This copy exists so the same PIN survives a reinstall: after the user
+  /// re-authenticates properly (Google / bdapps OTP) the client can pull the
+  /// hash back down rather than forcing them to choose a new PIN. Writing it
+  /// requires a valid access token, so setting a PIN is already authenticated.
+  pin_hash      String?
+  pin_set_at    DateTime?
+
+  /// Bumped to invalidate every access token already issued to this user.
+  ///
+  /// Access JWTs carry the version they were minted at; `requireUserId()`
+  /// compares that claim against this column and rejects anything stale.
+  /// Without it a leaked JWT stayed valid until expiry with no way to kill it
+  /// (SEC-004a) — the whole point of shortening the JWT to an hour is that
+  /// this gives us a revocation switch for the window that remains.
+  token_version Int       @default(0)
 
   /// Which flow created this account: "bdapps" (phone + carrier gateway),
   /// "google" (Play Store build), or "local" (email + password).
@@ -64,10 +96,12 @@ model User {
   /// already prevents claiming a number somebody else has registered.
   phone_verified Boolean  @default(false)
 
-  subscription Subscription?
-  houses       House[]
-  audit_logs   AuditLog[]    @relation("AuditActor")
-  preference   UserPreference?
+  subscription   Subscription?
+  houses         House[]
+  audit_logs     AuditLog[]    @relation("AuditActor")
+  preference     UserPreference?
+  refresh_tokens     RefreshToken[]
+  coupon_redemptions CouponRedemption[]
 
   @@index([email])
   @@index([is_active, deleted_at])
@@ -87,6 +121,91 @@ model UserPreference {
   user User @relation(fields: [user_id], references: [id], onDelete: Cascade)
 
   @@index([user_id])
+}
+
+enum CouponType {
+  /// Pushes the user's trial end date out by `value_days`. Touches the
+  /// Subscription row directly, because "your trial is longer" is exactly
+  /// what that row already means.
+  TRIAL_EXTENSION
+
+  /// Grants PRO-level limits for `value_days` without a Subscription change.
+  /// Read at entitlement time, so it expires on its own and leaves the
+  /// underlying subscription untouched underneath it.
+  FREE_PRO
+}
+
+/// A redeemable code.
+///
+/// `code` is uppercase and generated with real entropy — see
+/// `scripts/coupons.ts`. A guessable code attached to a free-PRO grant is an
+/// open till, and walking a coupon namespace is a standard attack, which is
+/// also why redemption is rate limited per user.
+model Coupon {
+  id               String    @id @default(uuid())
+  code             String    @unique
+  type             CouponType
+  value_days       Int
+  /// NULL means unlimited redemptions.
+  max_redemptions  Int?
+  redemptions_used Int       @default(0)
+  valid_from       DateTime?
+  valid_until      DateTime?
+  is_active        Boolean   @default(true)
+  created_at       DateTime  @default(now())
+
+  redemptions CouponRedemption[]
+
+  @@index([code, is_active])
+}
+
+/// One row per (coupon, user). The composite unique is the one-per-user rule —
+/// enforced by the database rather than by a check-then-insert, which two
+/// concurrent requests would both pass.
+model CouponRedemption {
+  id          String   @id @default(uuid())
+  coupon_id   String
+  user_id     String
+  redeemed_at DateTime @default(now())
+  /// When the grant lapses. For FREE_PRO this is what the entitlement lookup
+  /// compares against; for TRIAL_EXTENSION it records the new trial end.
+  expires_at  DateTime
+
+  coupon Coupon @relation(fields: [coupon_id], references: [id], onDelete: Cascade)
+  user   User   @relation(fields: [user_id], references: [id], onDelete: Cascade)
+
+  @@unique([coupon_id, user_id])
+  /// Serves the "does this user have a live grant right now" lookup that runs
+  /// on every plan resolution.
+  @@index([user_id, expires_at])
+}
+
+/// A long-lived, opaque, revocable handle that a device exchanges for a
+/// short-lived access JWT.
+///
+/// Only the SHA-256 hash of the token is stored. The raw value is returned
+/// exactly once, at issue time, and lives thereafter only in the device
+/// keystore — so a dump of this table cannot be replayed against the API.
+///
+/// Rotation: every successful refresh revokes the presented token and issues
+/// a new one. A revoked token being presented again means it was captured and
+/// replayed (or the legitimate client raced itself), so that event revokes
+/// the user's whole family of tokens rather than trusting the caller.
+model RefreshToken {
+  id           String    @id @default(uuid())
+  user_id      String
+  token_hash   String    @unique
+  /// Free-text device hint ("Pixel 8", "SM-A546B") so a user can tell their
+  /// sessions apart in a future "signed-in devices" screen.
+  device_label String?
+  created_at   DateTime  @default(now())
+  last_used_at DateTime?
+  expires_at   DateTime
+  revoked_at   DateTime?
+
+  user User @relation(fields: [user_id], references: [id], onDelete: Cascade)
+
+  @@index([user_id, revoked_at])
 }
 
 model Subscription {
@@ -183,6 +302,7 @@ model Tenant {
   rent_charges   RentCharge[]
   family_members TenantFamilyMember[]
   attachments    Attachment[] @relation("TenantAttachments")
+  email_logs     EmailLog[]   @relation("TenantEmails")
 
   @@index([owner_id, deleted_at])
   @@index([owner_id, full_name])
@@ -499,4 +619,43 @@ model RateLimitToken {
   created_at DateTime @default(now())
 
   @@index([key, created_at])
+}
+
+/// Outbound notification attempts to tenants.
+///
+/// Three jobs, all load-bearing:
+///   1. **Idempotency.** `dedupe_key` is UNIQUE, so a retried request cannot
+///      mail a tenant the same invoice twice. POST /api/payments returns the
+///      EXISTING payment when an idempotency key repeats, and without this the
+///      retry would look like a fresh send.
+///   2. **Visibility.** A send that fails must not fail the payment write, so
+///      failures are swallowed at the call site — this table is the only place
+///      they surface. Without it, "did the tenant get their receipt?" would be
+///      unanswerable.
+///   3. **Retry.** A FAILED row carries everything needed to send again.
+///
+/// `channel` exists because email is the first adapter, not the only intended
+/// one: in Bangladesh SMS/WhatsApp reach tenants far more reliably, and
+/// `Tenant.email` is nullable precisely because it is often missing.
+model EmailLog {
+  id          String    @id @default(uuid())
+  /// Landlord whose action triggered this. Null if the tenant row is gone.
+  user_id     String?
+  tenant_id   String?
+  kind        String
+  channel     String    @default("EMAIL")
+  to_address  String
+  subject     String?
+  /// Stable identity of the underlying event, NOT of the send attempt.
+  dedupe_key  String    @unique
+  status      String    @default("PENDING")
+  provider_id String?
+  error       String?
+  created_at  DateTime  @default(now())
+  sent_at     DateTime?
+
+  tenant Tenant? @relation("TenantEmails", fields: [tenant_id], references: [id])
+
+  @@index([tenant_id, created_at])
+  @@index([status, created_at])
 }

@@ -18,7 +18,10 @@ export const dynamic = "force-dynamic";
 // Default FREE-plan settings applied at registration time. These match the
 // values inserted by `prisma/seed.ts` and are used only as a safety net if
 // the seed has not yet run (e.g. fresh CI environment).
-const FREE_TRIAL_DAYS = 14;
+// Fallback only. The real trial length is `Plan.trial_days`, read from the
+// FREE row below, so changing it is a data change rather than a deploy. This
+// constant covers the case where an older row predates that column.
+const FREE_TRIAL_DAYS_FALLBACK = 30;
 
 // Strip spaces/dashes/parentheses so "+212 6 12 34 56 78" and "00212612345678"
 // both become "00212612345678" before storage and lookup.
@@ -147,11 +150,13 @@ async function handleRegister(request: Request) {
         },
       });
 
-      // Every new user starts on the FREE plan with a 14-day trial window so
-      // they can use the product before being asked to pay.
+      // Every new user starts on the FREE plan with a trial window so they
+      // can use the product before being asked to pay. Length comes from the
+      // plan row, not a constant.
+      const trialDays = freePlan.trial_days || FREE_TRIAL_DAYS_FALLBACK;
       const now = new Date();
       const periodEnd = new Date(now);
-      periodEnd.setDate(periodEnd.getDate() + FREE_TRIAL_DAYS);
+      periodEnd.setDate(periodEnd.getDate() + trialDays);
 
       await tx.subscription.create({
         data: {

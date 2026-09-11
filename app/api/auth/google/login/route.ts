@@ -1,6 +1,10 @@
 import { NextResponse } from "next/server";
 import bcrypt from "bcryptjs";
-import { encode } from "next-auth/jwt";
+import {
+  ACCESS_TOKEN_TTL_SECONDS,
+  issueRefreshToken,
+  mintAccessToken,
+} from "@/lib/auth/tokens";
 import { createRemoteJWKSet, jwtVerify } from "jose";
 import { prisma } from "@/lib/prisma";
 import {
@@ -54,7 +58,9 @@ const GOOGLE_JWKS = createRemoteJWKSet(
 
 const GOOGLE_ISSUERS = ["https://accounts.google.com", "accounts.google.com"];
 
-const FREE_TRIAL_DAYS = 14;
+// Fallback only — the real length is `Plan.trial_days` on the FREE row.
+// See the same note in app/api/auth/register/route.ts.
+const FREE_TRIAL_DAYS_FALLBACK = 30;
 
 function allowedAudiences(): string[] {
   return (process.env.GOOGLE_CLIENT_IDS ?? "")
@@ -236,9 +242,10 @@ export async function POST(request: Request) {
           },
         });
 
+        const trialDays = freePlan.trial_days || FREE_TRIAL_DAYS_FALLBACK;
         const now = new Date();
         const periodEnd = new Date(now);
-        periodEnd.setDate(periodEnd.getDate() + FREE_TRIAL_DAYS);
+        periodEnd.setDate(periodEnd.getDate() + trialDays);
 
         await tx.subscription.create({
           data: {
@@ -266,21 +273,22 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: "Account is disabled." }, { status: 403 });
   }
 
-  // Mint the same NextAuth JWT every other login route returns.
-  const token = await encode({
-    token: {
-      sub: user.id,
-      id: user.id,
-      email: user.email,
-      name: user.full_name,
-    },
-    secret: SECRET,
-    maxAge: 60 * 60 * 24 * 30, // 30 days
-  });
+  // A short-lived access token plus a revocable refresh token, the same pair
+  // every login route now returns. The refresh token is what the device puts
+  // in the keystore behind the PIN; the access token is deliberately good for
+  // only an hour so a leaked one has a floor on its usefulness.
+  const token = await mintAccessToken(user);
+  const refresh = await issueRefreshToken(
+    user.id,
+    request.headers.get("user-agent"),
+  );
 
   const response = NextResponse.json({
     ok: true,
     token,
+    refreshToken: refresh.token,
+    refreshExpiresAt: refresh.expiresAt.toISOString(),
+    expiresInSeconds: ACCESS_TOKEN_TTL_SECONDS,
     user: {
       id: user.id,
       email: user.email,
@@ -298,7 +306,9 @@ export async function POST(request: Request) {
     httpOnly: true,
     sameSite: "lax",
     path: "/",
-    maxAge: 60 * 60 * 24 * 30,
+    // Matches the access token's own lifetime. A cookie outliving the JWT
+    // inside it just means the browser sends something already rejected.
+    maxAge: ACCESS_TOKEN_TTL_SECONDS,
     secure: process.env.NODE_ENV === "production",
   });
 

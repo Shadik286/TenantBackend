@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { requireUserId } from "@/lib/require-user";
 import { prisma } from "@/lib/prisma";
+import { notifyLeaseAssignment } from "@/lib/notifications";
 
 export const runtime = "nodejs";
 
@@ -169,6 +170,21 @@ export async function POST(request: NextRequest) {
       created_at: true,
       updated_at: true,
     },
+  });
+
+  // Assignment notice — path 1 of 3. The other two live in
+  // app/api/tenants/route.ts (tenant + lease created together during
+  // onboarding) and app/api/tenants/[tenantId]/route.ts (re-assignment via
+  // tenant edit). All three must stay wired, or most real assignments send
+  // nothing: this direct route is actually the least-travelled of them.
+  await notifyLeaseAssignment({
+    landlordUserId: ownerId,
+    leaseId: lease.id,
+    houseId: lease.house_id,
+    unitId: lease.unit_id,
+    tenantId: lease.tenant_id,
+    moveInDate: lease.move_in_date,
+    securityDeposit: lease.security_deposit?.toFixed(2) ?? null,
   });
 
   return NextResponse.json({ data: lease }, { status: 201 });

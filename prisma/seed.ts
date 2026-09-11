@@ -5,10 +5,18 @@
 import { PrismaClient } from "@prisma/client";
 import { Decimal } from "decimal.js";
 
-const FREE_MAX_HOUSES = 2;
-const FREE_MAX_UNITS_PER_HOUSE = 5;
-const PRO_MAX_HOUSES = 2_147_483_647;
-const PRO_MAX_UNITS_PER_HOUSE = 2_147_483_647;
+const UNLIMITED = 2_147_483_647;
+
+const FREE_MAX_HOUSES = 1;
+const FREE_MAX_UNITS_PER_HOUSE = 3;
+const FREE_MAX_TENANTS = 3;
+const PRO_MAX_HOUSES = UNLIMITED;
+const PRO_MAX_UNITS_PER_HOUSE = UNLIMITED;
+const PRO_MAX_TENANTS = UNLIMITED;
+
+/// Trial window handed to every new signup. Same on both tiers because the
+/// trial is a property of the signup, not of the plan the user ends on.
+const TRIAL_DAYS = 30;
 
 const prisma = new PrismaClient();
 
@@ -18,10 +26,14 @@ async function main() {
       name: "FREE",
       max_houses: FREE_MAX_HOUSES,
       max_units_per_house: FREE_MAX_UNITS_PER_HOUSE,
+      max_tenants: FREE_MAX_TENANTS,
+      trial_days: TRIAL_DAYS,
       price_monthly: new Decimal("0"),
       features: {
         max_houses: FREE_MAX_HOUSES,
         max_units_per_house: FREE_MAX_UNITS_PER_HOUSE,
+        max_tenants: FREE_MAX_TENANTS,
+        trial_days: TRIAL_DAYS,
         reports: false,
         attachments: true,
       },
@@ -30,10 +42,14 @@ async function main() {
       name: "PRO",
       max_houses: PRO_MAX_HOUSES,
       max_units_per_house: PRO_MAX_UNITS_PER_HOUSE,
+      max_tenants: PRO_MAX_TENANTS,
+      trial_days: TRIAL_DAYS,
       price_monthly: new Decimal("29.00"),
       features: {
         max_houses: "unlimited",
         max_units_per_house: "unlimited",
+        max_tenants: "unlimited",
+        trial_days: TRIAL_DAYS,
         reports: true,
         attachments: true,
       },
@@ -47,6 +63,8 @@ async function main() {
         name: plan.name,
         max_houses: plan.max_houses,
         max_units_per_house: plan.max_units_per_house,
+        max_tenants: plan.max_tenants,
+        trial_days: plan.trial_days,
         price_monthly: plan.price_monthly,
         features: plan.features,
         is_active: true,
@@ -54,6 +72,8 @@ async function main() {
       update: {
         max_houses: plan.max_houses,
         max_units_per_house: plan.max_units_per_house,
+        max_tenants: plan.max_tenants,
+        trial_days: plan.trial_days,
         price_monthly: plan.price_monthly,
         features: plan.features,
         is_active: true,
@@ -63,7 +83,8 @@ async function main() {
 
   const total = await prisma.plan.count();
   console.log(
-    `Seeded ${total} plans (FREE = ${FREE_MAX_HOUSES} houses, ${FREE_MAX_UNITS_PER_HOUSE} units/house; PRO = unlimited).`
+    `Seeded ${total} plans (FREE = ${FREE_MAX_HOUSES} house, ${FREE_MAX_UNITS_PER_HOUSE} units/house, ` +
+      `${FREE_MAX_TENANTS} tenants, ${TRIAL_DAYS}-day trial; PRO = unlimited).`
   );
 }
 

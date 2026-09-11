@@ -1,6 +1,10 @@
 import { NextResponse } from "next/server";
 import bcrypt from "bcryptjs";
-import { encode } from "next-auth/jwt";
+import {
+  ACCESS_TOKEN_TTL_SECONDS,
+  issueRefreshToken,
+  mintAccessToken,
+} from "@/lib/auth/tokens";
 import type { User } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
 import {
@@ -120,23 +124,22 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: "Invalid credentials." }, { status: 401 });
   }
 
-  // We encode both `sub` and a top-level `id` claim so the NextAuth
-  // `session` callback in `auth.ts` can populate `session.user.id`.
+  // `mintAccessToken` encodes both `sub` and a top-level `id` claim so the
+  // NextAuth `session` callback in `auth.ts` can populate `session.user.id`.
   // Without `id`, the `session` callback's `token.id` is undefined and
-  // `requireUserId()` answers 401 even when the cookie was sent.
-  const token = await encode({
-    token: {
-      sub: user.id,
-      id: user.id,
-      email: user.email,
-      name: user.full_name,
-    },
-    secret: SECRET,
-    maxAge: 60 * 60 * 24 * 30, // 30 days
-  });
+  // `requireUserId()` answers 401 even when the cookie was sent. It also
+  // stamps `tv`, the token version that makes this token revocable.
+  const token = await mintAccessToken(user);
+  const refresh = await issueRefreshToken(
+    user.id,
+    request.headers.get("user-agent"),
+  );
 
   const response = NextResponse.json({
     ok: true,
+    refreshToken: refresh.token,
+    refreshExpiresAt: refresh.expiresAt.toISOString(),
+    expiresInSeconds: ACCESS_TOKEN_TTL_SECONDS,
     // Mobile clients (Flutter on Android/iOS) are notoriously flaky with
     // cookie jars, so we ALSO ship the JWT in the body. The Flutter
     // `ApiClient._headers()` reads it and re-sends it as
@@ -156,7 +159,7 @@ export async function POST(request: Request) {
     httpOnly: true,
     sameSite: "lax",
     path: "/",
-    maxAge: 60 * 60 * 24 * 30,
+    maxAge: ACCESS_TOKEN_TTL_SECONDS,
     secure: process.env.NODE_ENV === "production",
   });
 

@@ -11,11 +11,14 @@ function serializePlan(plan: {
   name: string;
   max_houses: number;
   max_units_per_house: number;
+  max_tenants: number;
+  trial_days: number;
   price_monthly: { toString(): string };
   features: unknown;
 }) {
   const unlimitedHouses = plan.max_houses >= UNLIMITED_SENTINEL;
   const unlimitedUnits = plan.max_units_per_house >= UNLIMITED_SENTINEL;
+  const unlimitedTenants = plan.max_tenants >= UNLIMITED_SENTINEL;
   return {
     id: plan.id,
     name: plan.name,
@@ -23,6 +26,9 @@ function serializePlan(plan: {
     is_unlimited_houses: unlimitedHouses,
     max_units_per_house: unlimitedUnits ? null : plan.max_units_per_house,
     is_unlimited_units_per_house: unlimitedUnits,
+    max_tenants: unlimitedTenants ? null : plan.max_tenants,
+    is_unlimited_tenants: unlimitedTenants,
+    trial_days: plan.trial_days,
     price_monthly: plan.price_monthly.toString(),
     features: plan.features,
   };
@@ -41,6 +47,8 @@ export async function GET() {
           name: true,
           max_houses: true,
           max_units_per_house: true,
+          max_tenants: true,
+          trial_days: true,
           price_monthly: true,
           features: true,
         },
@@ -140,6 +148,8 @@ export async function PATCH(request: Request) {
           name: true,
           max_houses: true,
           max_units_per_house: true,
+          max_tenants: true,
+          trial_days: true,
           price_monthly: true,
           features: true,
         },

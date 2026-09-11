@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { requireUserId } from "@/lib/require-user";
 import { prisma } from "@/lib/prisma";
+import { notifyLeaseAssignment } from "@/lib/notifications";
 
 export const runtime = "nodejs";
 
@@ -164,8 +165,43 @@ export async function PATCH(
   if (resolvedEnd !== undefined) leasePatch.end_date = resolvedEnd ? new Date(resolvedEnd) : null;
   if (resolvedDeposit !== undefined) leasePatch.security_deposit = resolvedDeposit;
   if (resolvedStatus !== undefined) leasePatch.status = resolvedStatus;
-  if (resolvedUnitId !== undefined) leasePatch.unit_id = resolvedUnitId;
-  if (resolvedHouseId !== undefined) leasePatch.house_id = resolvedHouseId;
+
+  // 🔒 SEC-008 — these two ids come straight from the request body, so without
+  // an ownership check an authenticated user could point their own tenant's
+  // lease at SOMEONE ELSE's unit: marking that unit occupied, corrupting the
+  // victim's rent roll and reports, and blocking a legitimate lease there.
+  //
+  // Verified against the caller's houses before either value is applied.
+  // 404 rather than 403, so a probe cannot confirm that an id exists.
+  if (resolvedUnitId !== undefined) {
+    const ownedUnit = await prisma.unit.findFirst({
+      where: {
+        id: resolvedUnitId,
+        deleted_at: null,
+        house: { owner_id: ownerId, deleted_at: null },
+      },
+      select: { id: true, house_id: true },
+    });
+    if (!ownedUnit) {
+      return NextResponse.json({ error: "UNIT_NOT_FOUND" }, { status: 404 });
+    }
+    leasePatch.unit_id = ownedUnit.id;
+    // Derive the house from the unit rather than trusting a separately
+    // supplied house_id: a caller could otherwise pair an owned unit with
+    // another owner's house and split the lease across both.
+    leasePatch.house_id = ownedUnit.house_id;
+  }
+
+  if (resolvedHouseId !== undefined && leasePatch.house_id === undefined) {
+    const ownedHouse = await prisma.house.findFirst({
+      where: { id: resolvedHouseId, owner_id: ownerId, deleted_at: null },
+      select: { id: true },
+    });
+    if (!ownedHouse) {
+      return NextResponse.json({ error: "HOUSE_NOT_FOUND" }, { status: 404 });
+    }
+    leasePatch.house_id = ownedHouse.id;
+  }
 
   // Normalise family_members input (camelCase or snake_case).
   const incomingFamily = family_members ?? familyMembers;
@@ -183,7 +219,7 @@ export async function PATCH(
             .filter((m) => m.name.length > 0 && m.relation.length > 0)
         : undefined;
 
-  const updated = await prisma.$transaction(async (tx) => {
+  await prisma.$transaction(async (tx) => {
     if (Object.keys(tenantPatch).length > 0) {
       await tx.tenant.update({ where: { id: tenantId }, data: tenantPatch });
     }
@@ -206,8 +242,49 @@ export async function PATCH(
         });
       }
     }
-    return loadOwnedTenant(tenantId, ownerId);
+    // NOTE: do NOT read back through `loadOwnedTenant` here.
+    //
+    // That helper uses the GLOBAL prisma client, not `tx`. Called from inside
+    // the transaction it asks the pool for a second connection — but
+    // `connection_limit=1` (required for the Supabase pooler on serverless)
+    // means the only connection is already held by this very transaction. The
+    // read waits for a connection that cannot free until the transaction
+    // commits, and the transaction cannot commit until the read returns:
+    //
+    //   Transaction API error: Transaction already closed ... timeout 5000 ms
+    //
+    // The writes above are all that belongs in here. The read-back happens
+    // after the commit, where it has a connection to itself.
   });
+
+  const updated = await loadOwnedTenant(tenantId, ownerId);
+
+  // Assignment notice — path 3 of 3, and the one an implementation is most
+  // likely to miss: a re-assignment looks like an edit, not a creation.
+  //
+  // Only fires when the unit actually CHANGED. Editing a move-in date or a
+  // deposit is not news to the tenant, and the dedupe key is keyed on
+  // (lease, unit) so re-saving the same unit stays silent anyway.
+  const previousLease = (tenant.leases ?? [])[0];
+  const movedToNewUnit =
+    leasePatch.unit_id !== undefined &&
+    previousLease &&
+    leasePatch.unit_id !== previousLease.unit_id;
+
+  if (movedToNewUnit) {
+    const currentLease = (updated?.leases ?? [])[0];
+    if (currentLease) {
+      await notifyLeaseAssignment({
+        landlordUserId: ownerId,
+        leaseId: currentLease.id,
+        houseId: currentLease.house_id,
+        unitId: currentLease.unit_id,
+        tenantId,
+        moveInDate: currentLease.move_in_date,
+        securityDeposit: currentLease.security_deposit?.toFixed(2) ?? null,
+      });
+    }
+  }
 
   return NextResponse.json({ data: serializeTenant(updated) });
 }

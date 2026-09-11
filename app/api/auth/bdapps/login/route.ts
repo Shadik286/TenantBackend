@@ -1,10 +1,15 @@
 import { NextResponse } from "next/server";
 import bcrypt from "bcryptjs";
-import { encode } from "next-auth/jwt";
+import {
+  ACCESS_TOKEN_TTL_SECONDS,
+  issueRefreshToken,
+  mintAccessToken,
+} from "@/lib/auth/tokens";
 import type { User } from "@prisma/client";
 import { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
 import { enforceBdappsSubscription } from "@/lib/bdapps";
+import { activeCouponEntitlement } from "@/lib/plans/get-plan";
 import {
   RATE_LIMITS,
   clientIp,
@@ -108,15 +113,41 @@ export async function POST(request: Request) {
   );
   if (limited) return limited;
 
-  // Independently confirm with the gateway that this number is a real
-  // subscriber, rather than trusting the caller. Runs in log-only mode until
-  // BDAPPS_VERIFY_MODE=enforce — see lib/bdapps.ts for why.
-  const subscriptionRejection = await enforceBdappsSubscription(normalizedPhone);
-  if (subscriptionRejection) {
-    return NextResponse.json(
-      { error: "NOT_SUBSCRIBED", message: subscriptionRejection },
-      { status: 403 }
-    );
+  // A live FREE_PRO coupon outranks the carrier subscription check. The whole
+  // point of handing someone a free-PRO code is that they get PRO without
+  // paying anyone, so gating it on "are you a paying bdapps subscriber" would
+  // defeat it — they would be told to subscribe to use the thing that exists
+  // to let them not subscribe.
+  //
+  // The lookup is by phone because the user row is not resolved until further
+  // down; scoped to provider "bdapps" for the same reason every other lookup
+  // in this file is (SEC-001: a bare phone number must not reach accounts
+  // created by other flows).
+  const existingBdappsUser = await prisma.user.findFirst({
+    where: { phone: normalizedPhone, provider: "bdapps", deleted_at: null },
+    select: { id: true },
+  });
+  const couponEntitlement = existingBdappsUser
+    ? await activeCouponEntitlement(existingBdappsUser.id)
+    : null;
+
+  if (!couponEntitlement) {
+    // Independently confirm with the gateway that this number is a real
+    // subscriber, rather than trusting the caller. Runs in log-only mode until
+    // BDAPPS_VERIFY_MODE=enforce — see lib/bdapps.ts for why.
+    const subscriptionRejection =
+      await enforceBdappsSubscription(normalizedPhone);
+    if (subscriptionRejection) {
+      return NextResponse.json(
+        { error: "NOT_SUBSCRIBED", message: subscriptionRejection },
+        { status: 403 }
+      );
+    }
+  } else {
+    console.log("[bdapps] gateway check skipped, active coupon entitlement", {
+      phone_suffix: normalizedPhone.slice(-4),
+      coupon_expires_at: couponEntitlement.expiresAt.toISOString(),
+    });
   }
 
   // 1) Look up an existing bdapps user by phone, or create one with the PRO plan.
@@ -289,22 +320,21 @@ export async function POST(request: Request) {
     );
   }
 
-  // 2) Mint the same NextAuth JWT the standard login returns so Flutter's
-  // existing bearer-token machinery works without any client-side change.
-  const token = await encode({
-    token: {
-      sub: user.id,
-      id: user.id,
-      email: user.email,
-      name: user.full_name,
-    },
-    secret: SECRET,
-    maxAge: 60 * 60 * 24 * 30, // 30 days
-  });
+  // 2) Mint the same access/refresh pair the standard login returns so
+  // Flutter's existing bearer-token machinery works unchanged, and the
+  // bdapps variant gets PIN unlock on the same terms as the Google one.
+  const token = await mintAccessToken(user);
+  const refresh = await issueRefreshToken(
+    user.id,
+    request.headers.get("user-agent"),
+  );
 
   const response = NextResponse.json({
     ok: true,
     token,
+    refreshToken: refresh.token,
+    refreshExpiresAt: refresh.expiresAt.toISOString(),
+    expiresInSeconds: ACCESS_TOKEN_TTL_SECONDS,
     user: {
       id: user.id,
       email: user.email,
@@ -319,7 +349,7 @@ export async function POST(request: Request) {
     httpOnly: true,
     sameSite: "lax",
     path: "/",
-    maxAge: 60 * 60 * 24 * 30,
+    maxAge: ACCESS_TOKEN_TTL_SECONDS,
     secure: process.env.NODE_ENV === "production",
   });
 
