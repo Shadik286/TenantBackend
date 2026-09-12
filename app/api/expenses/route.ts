@@ -69,6 +69,8 @@ const CreateExpenseSchema = z.object({
  * Lists expenses scoped to the caller's houses. Accepts:
  *   - houseId: required-ish; UI always passes one. Omitted -> ALL houses for owner.
  *   - month: "YYYY-MM" applied to expense_date range.
+ *   - year:  "YYYY" applied to expense_date range when no month is given.
+ *            Used by the annual report to list every expense of the year.
  *   - category: filter to a single ExpenseCategory.
  *
  * Soft-deleted rows (`deleted_at IS NOT NULL`) are excluded.
@@ -82,6 +84,8 @@ export async function GET(request: NextRequest) {
   const houseId = sp.get("houseId");
   const month = sp.get("month"); // YYYY-MM
   const category = sp.get("category");
+  const year = sp.get("year"); // YYYY
+  const yearNum = year && /^\d{4}$/.test(year) ? Number(year) : null;
 
   // Cap at 200 rows. Finances tab never needs more; prevents accidental
   // full-table scans from making the page slow to render.
@@ -109,7 +113,14 @@ export async function GET(request: NextRequest) {
               ),
             },
           }
-        : {}),
+        : yearNum !== null
+          ? {
+              expense_date: {
+                gte: new Date(Date.UTC(yearNum, 0, 1)),
+                lt: new Date(Date.UTC(yearNum + 1, 0, 1)),
+              },
+            }
+          : {}),
       ...(category ? { category: category as any } : {}),
     },
     orderBy: { expense_date: "desc" },
