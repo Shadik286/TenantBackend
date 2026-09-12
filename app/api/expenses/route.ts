@@ -38,6 +38,7 @@ function serializeExpense(e: any) {
     expense_date: e.expense_date,
     description: e.description ?? null,
     vendor: e.vendor ?? null,
+    receipt_url: e.receipt_url ?? null,
     created_by: e.created_by,
     created_at: e.created_at,
     updated_at: e.updated_at,
@@ -58,6 +59,10 @@ const CreateExpenseSchema = z.object({
   expense_date: z.string().min(1),
   description: z.string().max(2000).optional().nullable(),
   vendor: z.string().max(120).optional().nullable(),
+  // Cloudinary URL produced by /api/uploads/cloudinary. Validated as a URL so
+  // a malformed value is rejected here rather than rendering as a broken
+  // image in the app.
+  receipt_url: z.string().url().max(2048).optional().nullable(),
 });
 
 /**
@@ -121,6 +126,7 @@ export async function GET(request: NextRequest) {
       expense_date: true,
       description: true,
       vendor: true,
+      receipt_url: true,
       created_by: true,
       created_at: true,
       updated_at: true,
@@ -207,6 +213,7 @@ export async function POST(request: NextRequest) {
         expense_date: expenseDate,
         description: input.description ?? null,
         vendor: input.vendor ?? null,
+        receipt_url: input.receipt_url ?? null,
         created_by: ownerId,
       },
       include: { unit: true },

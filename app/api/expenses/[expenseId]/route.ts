@@ -40,6 +40,7 @@ function serializeExpense(e: any) {
     expense_date: e.expense_date,
     description: e.description ?? null,
     vendor: e.vendor ?? null,
+    receipt_url: e.receipt_url ?? null,
     created_by: e.created_by,
     created_at: e.created_at,
     updated_at: e.updated_at,
@@ -75,6 +76,9 @@ const PatchExpenseSchema = z.object({
   description: z.string().max(2000).nullable().optional(),
   vendor: z.string().max(120).nullable().optional(),
   unit_id: z.string().uuid().nullable().optional(),
+  // `null` detaches the receipt; omitting the key leaves the stored one
+  // untouched, so a PATCH that only changes the amount never wipes the photo.
+  receipt_url: z.string().url().max(2048).nullable().optional(),
 });
 
 export async function GET(
@@ -142,6 +146,7 @@ export async function PATCH(
   if (input.description !== undefined) data.description = input.description;
   if (input.vendor !== undefined) data.vendor = input.vendor;
   if (input.unit_id !== undefined) data.unit_id = input.unit_id;
+  if (input.receipt_url !== undefined) data.receipt_url = input.receipt_url;
 
   try {
     const updated = await prisma.expense.update({

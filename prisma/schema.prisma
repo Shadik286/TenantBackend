@@ -460,6 +460,12 @@ model Expense {
   expense_date    DateTime
   description     String?
   vendor          String?
+  // Cloudinary URL for a photo of the receipt. Nullable and additive: rows
+  // created before this column existed simply have no receipt. Mirrors
+  // `Tenant.photo_url` / `Tenant.nid_image_url` rather than using the
+  // `Attachment` table, because the UI shows exactly one image and a scalar
+  // avoids a join on every expense list query.
+  receipt_url     String?
   created_by      String
   created_at      DateTime        @default(now())
   updated_at      DateTime        @updatedAt
