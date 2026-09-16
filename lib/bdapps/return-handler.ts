@@ -237,7 +237,10 @@ export async function handleSubscriptionReturn(
         });
       }
 
-      if (carrier.subscribed) {
+      // Same rule as the nightly reconciliation: getStatus, or a record that
+      // bdApps' own notification verified. An unverified record is someone
+      // having reached this URL, which is not evidence of anything.
+      if (carrier.subscribed || (bkash.subscribed && bkash.verified)) {
         success = true;
         // The only local trace a bKash payment leaves, and what every later
         // check reads.

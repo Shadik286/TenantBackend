@@ -122,16 +122,30 @@ export async function syncSubscriptionWithBdapps(
   const sources =
     `carrier=${carrier.status}` +
     (perApplication ? ` [${perApplication}]` : "") +
-    ` bkashStore=${bkash.reachable ? "reachable" : "unreachable"}`;
+    ` bkashStore=${
+      bkash.reachable
+        ? bkash.subscribed
+          ? bkash.verified
+            ? "verified"
+            : "unverified-record"
+          : "no-record"
+        : "unreachable"
+    }`;
   const bdappsSaysNo = carrier.status === "NOT_REGISTERED";
 
-  // bdApps decides, and nothing else does.
+  // bdApps decides, and nothing else does - but they have two ways of saying
+  // it, and only one of them is a lookup.
   //
-  // The local bKash list is kept as a record and logged below, but it no
-  // longer grants: it is our own file, an entry outlives the subscription
-  // that created it, and reading it back as proof is what kept a cancelled
-  // payment on PRO.
-  const subscribed = carrier.subscribed;
+  //   getStatus            carrier billing. Cannot see a bKash subscription
+  //                        at all: a paying bKash number answers E1951.
+  //   their notification   sent unprompted when a subscription starts or
+  //                        ends, and the only signal that covers bKash.
+  //
+  // A `verified` record is the second one, relayed by the bridge's
+  // subscription_listener.php, which sets that flag and nothing else does. An
+  // UNVERIFIED record is just someone having reached the return page, and
+  // granting on those is what kept a cancelled payment on PRO.
+  const subscribed = carrier.subscribed || (bkash.subscribed && bkash.verified);
 
   // bdApps gave no usable answer, so we do not know: change nothing. An
   // outage must never read as "everybody unsubscribed". The registry's

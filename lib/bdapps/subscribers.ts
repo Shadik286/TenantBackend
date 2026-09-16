@@ -66,6 +66,17 @@ async function postForm(
 export type SubscriberRecord = {
   /** True only when the store positively holds this number. */
   subscribed: boolean;
+  /**
+   * True only when bdApps' own subscription notification put the record there
+   * (subscription_listener.php sets this and nothing else does).
+   *
+   * This is the distinction that matters: a bKash subscription cannot be
+   * looked up with getStatus, so the store is the only place it appears - but
+   * anyone reaching the return page can add to that store. An unverified
+   * record means "someone said they paid"; a verified one means bdApps said
+   * so, unprompted, and only that is worth a plan.
+   */
+  verified: boolean;
   method: string | null;
   createdAt: string | null;
   /** False when the store could not be reached — NOT the same as "no". */
@@ -82,11 +93,18 @@ export async function checkBkashSubscriber(
   });
 
   if (!data) {
-    return { subscribed: false, method: null, createdAt: null, reachable: false };
+    return {
+      subscribed: false,
+      verified: false,
+      method: null,
+      createdAt: null,
+      reachable: false,
+    };
   }
 
   return {
     subscribed: data.subscribed === true,
+    verified: data.verified === true,
     method: typeof data.method === "string" ? data.method : null,
     createdAt: typeof data.created === "string" ? data.created : null,
     reachable: true,
