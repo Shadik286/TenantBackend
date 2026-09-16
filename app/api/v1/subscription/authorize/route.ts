@@ -4,6 +4,7 @@ import { prisma } from "@/lib/prisma";
 import {
   bdappsCredentials,
   buildAuthorizeUrl,
+  makeAuthorizeRequest,
 } from "@/lib/bdapps/subscription";
 import { RATE_LIMITS, enforceRateLimit } from "@/lib/rate-limit";
 
@@ -112,9 +113,13 @@ export async function POST(request: NextRequest) {
   const origin =
     process.env.SUBSCRIPTION_RETURN_ORIGIN?.replace(/\/+$/, "") ??
     request.nextUrl.origin;
-  const redirectUrl = `${origin}/api/subscription/return`;
+  // The requestId goes in the PATH. bdApps returns the user with an empty
+  // query string, so a `?requestId=` would come back as nothing and the
+  // attempt could never be tied to this user.
+  const pending = makeAuthorizeRequest();
+  const redirectUrl = `${origin}/api/subscription/return/${pending.requestId}`;
 
-  const authorize = buildAuthorizeUrl(credentials, redirectUrl);
+  const authorize = buildAuthorizeUrl(credentials, redirectUrl, pending);
 
   await prisma.subscriptionAuthorization.create({
     data: {

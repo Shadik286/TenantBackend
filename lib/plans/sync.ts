@@ -86,24 +86,32 @@ export async function syncSubscriptionWithBdapps(
   // bridge for (carrier, and bKash when BDAPPS_BKASH_BASE is set), so a
   // subscriber of either kind is visible here.
   //
-  // The local bKash registry is read for the log line only, NOT to grant.
-  // It is our own file: the return endpoint used to write it on arrival and
-  // then read it back as proof, which meant a cancelled payment confirmed
-  // itself. Records written before that was fixed are still in there, so
-  // treating it as evidence would keep handing out PRO to people who never
-  // paid.
+  // The bKash registry counts too, because getStatus CANNOT answer for a
+  // bKash subscriber. Verified against a real paying number: getStatus
+  // reports E1951 "already unregistered" while the registry has held it as a
+  // paid bKash subscription since the day it was bought. Requiring getStatus
+  // alone therefore leaves every bKash customer on FREE for ever.
+  //
+  // What makes the registry safe to trust now, when it was not before: the
+  // return endpoint used to write the number on arrival and then read that
+  // write back as its own proof, so reaching the URL was the whole test.
+  // It no longer writes anything until bdApps confirms, and the notification
+  // listener (app/api/bdapps/subscription-notification) writes only on
+  // bdApps' own REGISTERED message and removes on UNREGISTERED.
   const [carrier, bkash] = await Promise.all([
     checkBdappsSubscription(phone),
     checkBkashSubscriber(phone),
   ]);
 
-  const subscribed = carrier.subscribed;
+  const subscribed = carrier.subscribed || bkash.subscribed;
 
   // Neither source gave a usable answer. We do not know, so change nothing —
   // an outage must never read as "everybody unsubscribed".
+  // A downgrade needs BOTH sources to have answered. An unreachable registry
+  // is not evidence that a bKash subscriber stopped paying.
   const carrierDefinite =
     carrier.subscribed || carrier.status === "NOT_REGISTERED";
-  if (!subscribed && !carrierDefinite) {
+  if (!subscribed && !(carrierDefinite && bkash.reachable)) {
     return {
       outcome: "GATEWAY_UNCLEAR",
       planName: currentPlan,

@@ -108,13 +108,25 @@ export type AuthorizeUrl = {
  * which must arrive percent-encoded — the sample bdApps supplied shows
  * `https%3A%2F%2F...`.
  */
+/**
+ * The identity of one attempt, made before the URL is built.
+ *
+ * Split out because the requestId has to go INTO `redirectUrl` - bdApps
+ * returns the user with an empty query string, so the only way to know who
+ * came back is to have put it in the path we handed them.
+ */
+export type PendingAuthorize = { requestId: string; requestTime: string };
+
+export function makeAuthorizeRequest(now: Date = new Date()): PendingAuthorize {
+  return { requestId: makeRequestId(now), requestTime: makeRequestTime(now) };
+}
+
 export function buildAuthorizeUrl(
   credentials: BdappsCredentials,
   redirectUrl: string,
-  now: Date = new Date(),
+  pending: PendingAuthorize = makeAuthorizeRequest(),
 ): AuthorizeUrl {
-  const requestId = makeRequestId(now);
-  const requestTime = makeRequestTime(now);
+  const { requestId, requestTime } = pending;
 
   const signature = signAuthorizeRequest({
     apiKey: credentials.apiKey,
