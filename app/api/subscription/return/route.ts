@@ -126,6 +126,10 @@ export async function GET(request: NextRequest) {
   // REGISTERED. That is the same source the nightly reconciliation trusts,
   // so the two can never disagree about what happened.
   let success = false;
+  // Three outcomes, not two: confirmed (PRO), definitely not (FAILED), and
+  // "bdApps has not said yet", which must settle as neither. A row left
+  // PENDING is retried by the app's poll and by the nightly reconciliation.
+  let unconfirmed = false;
 
   if (isExplicitFailureReturn(params)) {
     console.log("[subscription/return] explicit failure on return", {
@@ -163,49 +167,73 @@ export async function GET(request: NextRequest) {
     }
 
     if (!phone) {
-      // Nothing to verify against. Accept the return: the user completed the
-      // operator's flow to get here, and refusing everyone without a phone
-      // number on file would block the Google-signup path entirely. The
-      // nightly reconciliation re-checks them once a number exists.
-      console.warn("[subscription/return] no phone to verify, accepting", {
+      // Nothing to ask bdApps about, so there is nothing to confirm - and an
+      // unconfirmed return must not grant PRO. Left unsettled rather than
+      // failed: the attempt stays open, and the poll or the nightly
+      // reconciliation activates it once a number is on file and bdApps
+      // confirms.
+      console.warn("[subscription/return] no phone to verify, leaving open", {
         requestId,
       });
-      success = true;
+      unconfirmed = true;
     } else {
-      // Record the bKash subscription FIRST, exactly as the reference return
-      // page does. A bKash subscription exists nowhere upstream — there is no
-      // status API for it — so if this write does not happen, the payment
-      // leaves no trace and every later check reports UNREGISTERED.
-      await recordBkashSubscriber(phone, request.nextUrl.search);
+      // Ask bdApps, and ONLY bdApps.
+      //
+      // This used to write the number into the bKash registry first and then
+      // "confirm" by reading that write back, which made landing on this URL
+      // its own proof of payment - cancel at the gateway, still arrive here,
+      // still get PRO. The registry is our own record, not an authority, so
+      // it is now written AFTER bdApps confirms and never consulted to decide.
+      //
+      // checkBdappsSubscription asks every configured application (carrier and
+      // bKash both, when BDAPPS_BKASH_BASE is set), because a bKash subscriber
+      // is invisible to the carrier application's lookup.
+      const carrier = await checkBdappsSubscription(phone);
+      const bkash = await checkBkashSubscriber(phone);
 
-      // Then confirm against both sources: carrier billing via
-      // check_subscription.php, and the bKash registry we just wrote.
-      const [carrier, bkash] = await Promise.all([
-        checkBdappsSubscription(phone),
-        checkBkashSubscriber(phone),
-      ]);
-
-      if (carrier.subscribed || bkash.subscribed) {
+      if (carrier.subscribed) {
         success = true;
-      } else if (carrier.status === "NOT_REGISTERED" && bkash.reachable) {
-        console.log("[subscription/return] neither source shows a subscription", {
+        // Now it is a record of something confirmed, so keep it: it is the
+        // only local trace of a bKash payment for support to work from.
+        await recordBkashSubscriber(phone, request.nextUrl.search);
+      } else if (carrier.status === "NOT_REGISTERED") {
+        console.log("[subscription/return] bdApps does not show a subscription", {
           requestId,
           carrier: carrier.detail,
+          bkashStoreHasRecord: bkash.subscribed,
         });
       } else {
-        // TIMEOUT / GATEWAY_ERROR — we cannot confirm. Accept, because the
-        // user did complete the flow and making them pay twice for our
-        // inability to reach bdApps is the worse error. The nightly
-        // reconciliation will downgrade them if it turns out they are not
-        // actually subscribed.
-        console.warn("[subscription/return] gateway unclear, accepting", {
+        // TIMEOUT / GATEWAY_ERROR - bdApps did not answer, so there is no
+        // confirmation, so no PRO. This branch used to accept, on the
+        // reasoning that the user had completed the flow; but "reached our
+        // return URL" is not payment, and the gateway answering unclearly is
+        // exactly what happens when someone cancels partway. Leaving it
+        // unsettled costs a real payer a short wait; accepting costs us the
+        // plan.
+        console.warn("[subscription/return] gateway unclear, leaving open", {
           requestId,
           carrierStatus: carrier.status,
           bkashStoreReachable: bkash.reachable,
         });
-        success = true;
+        unconfirmed = true;
       }
     }
+  }
+
+  if (unconfirmed) {
+    // Record what came back, but leave the status PENDING so a later check can
+    // still settle it either way.
+    await prisma.subscriptionAuthorization.updateMany({
+      where: { request_id: requestId, status: "PENDING" },
+      data: { return_payload: payload },
+    });
+    return page(
+      "Confirming your subscription",
+      "We are waiting for bdApps to confirm this payment. Return to the app - " +
+        "your plan updates by itself as soon as they confirm. Nothing is " +
+        "activated until they do.",
+      true,
+    );
   }
 
   // Claim the row. `status: "PENDING"` in the where clause is the idempotency

@@ -40,6 +40,31 @@
  */
 export const BDAPPS_BASE = resolveBdappsBase();
 
+/**
+ * Every bridge whose `check_subscription.php` should be asked about a number.
+ *
+ * bdApps subscriptions belong to an APPLICATION, and getStatus only answers
+ * for the application whose id and password the bridge was configured with.
+ * The reference web client makes this explicit: it keeps two bases and asks
+ * both, because "KhelarScore carries mobile balance, SportsNWS24 carries
+ * bKash" - a bKash subscriber is invisible to the carrier application's
+ * lookup and vice versa.
+ *
+ * So if bKash payments for this app run through a second bdApps application,
+ * point `BDAPPS_BKASH_BASE` at its bridge and both get asked. With it unset
+ * this is just [BDAPPS_BASE] and nothing changes.
+ */
+export function bdappsStatusBases(): string[] {
+  const extra = (
+    process.env.BDAPPS_BKASH_BASE ??
+    process.env.Bdapps_Bkash_Base_URL ??
+    ""
+  ).trim();
+  if (!extra) return [BDAPPS_BASE];
+  const normalised = extra.replace(/\/+$/, "") + "/";
+  return normalised === BDAPPS_BASE ? [BDAPPS_BASE] : [BDAPPS_BASE, normalised];
+}
+
 function resolveBdappsBase(): string {
   // `Bdapps_Base_URL` is the spelling used in Vercel. `process.env` is
   // case-sensitive, so the exact casing has to be read; the uppercase forms
@@ -191,7 +216,8 @@ export function classify(
  * Never throws: every failure path returns a result object, because the caller
  * has to make a policy decision (allow or reject) rather than 500.
  */
-export async function checkBdappsSubscription(
+async function checkOneBase(
+  base: string,
   phone: string,
 ): Promise<BdappsCheckResult> {
   const controller = new AbortController();
@@ -201,7 +227,7 @@ export async function checkBdappsSubscription(
     // Form-encoded, matching what the Flutter client sends: `http.post` with a
     // Map body produces application/x-www-form-urlencoded, and the PHP endpoint
     // reads $_POST. Sending JSON here would arrive as an empty $_POST.
-    const response = await fetch(`${BDAPPS_BASE}check_subscription.php`, {
+    const response = await fetch(`${base}check_subscription.php`, {
       method: "POST",
       headers: { "Content-Type": "application/x-www-form-urlencoded" },
       body: new URLSearchParams({ user_mobile: phone }).toString(),
@@ -249,6 +275,41 @@ export async function checkBdappsSubscription(
   } finally {
     clearTimeout(timer);
   }
+}
+
+/**
+ * Ask every configured bdApps application whether `phone` is subscribed.
+ *
+ * Registered on ANY of them counts - a user pays once, through one of them,
+ * and the others have no idea. A definite "no" needs every base to answer
+ * definitely no; if any could not be reached, the answer is GATEWAY_ERROR,
+ * because an unreachable application is not evidence of anything.
+ */
+export async function checkBdappsSubscription(
+  phone: string,
+): Promise<BdappsCheckResult> {
+  const bases = bdappsStatusBases();
+  const results = await Promise.all(
+    bases.map((base) => checkOneBase(base, phone)),
+  );
+
+  const registered = results.find((r) => r.status === "REGISTERED");
+  if (registered) return registered;
+
+  const detail = bases
+    .map((base, i) => `${base}=${results[i].status}`)
+    .join(" ");
+
+  if (results.every((r) => r.status === "NOT_REGISTERED")) {
+    return { subscribed: false, status: "NOT_REGISTERED", detail };
+  }
+
+  const timedOut = results.some((r) => r.status === "TIMEOUT");
+  return {
+    subscribed: false,
+    status: timedOut ? "TIMEOUT" : "GATEWAY_ERROR",
+    detail,
+  };
 }
 
 /**

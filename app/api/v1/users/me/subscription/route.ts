@@ -76,12 +76,26 @@ export async function GET() {
 }
 
 /**
- * Switch the authenticated user's subscription to the named plan
- * (`"FREE"` / `"PRO"` / `"STARTER"`).
+ * Switch the authenticated user's subscription to the named plan.
  *
- * The subscription row is created on registration and never deleted; this
- * handler upserts it so changing plans always succeeds (no separate
- * "create subscription" call needed).
+ * DOWNGRADES ONLY. This handler used to set any plan the caller named, which
+ * meant one authenticated request -
+ *
+ *     PATCH /api/v1/users/me/subscription  {"plan_name":"PRO"}
+ *
+ * - granted unlimited PRO with no payment and without bdApps being asked at
+ * all. The bdapps login screen was doing exactly that on every sign-in, so an
+ * account came back PRO whether or not the payment gateway was completed, and
+ * cancelling at the gateway changed nothing.
+ *
+ * A paid plan may now only be set by a path that has confirmation behind it:
+ *
+ *   app/api/subscription/return   bdApps said REGISTERED after the gateway
+ *   lib/plans/sync.ts             bdApps says REGISTERED now (poll or cron)
+ *   app/api/v1/coupons/redeem     a coupon we issued
+ *
+ * Downgrading to a free plan stays open: nobody should have to visit a
+ * payment page to stop paying.
  */
 export async function PATCH(request: Request) {
   const guard = await requireUserId();
@@ -118,6 +132,22 @@ export async function PATCH(request: Request) {
     return NextResponse.json(
       { error: "Plan is not available." },
       { status: 404 }
+    );
+  }
+
+  // The entitlement gate. `price_monthly` rather than a name check, so a new
+  // paid tier added later is closed by default instead of being forgotten.
+  if (plan.price_monthly.greaterThan(0)) {
+    return NextResponse.json(
+      {
+        error: "PLAN_REQUIRES_PAYMENT",
+        code: "PLAN_REQUIRES_PAYMENT",
+        message:
+          `The ${plan.name} plan is activated by subscribing, not by asking. ` +
+          "Start the subscription from the app and it becomes active once " +
+          "bdApps confirms the payment.",
+      },
+      { status: 403 },
     );
   }
 

@@ -82,25 +82,28 @@ export async function syncSubscriptionWithBdapps(
     }
   }
 
-  // BOTH sources have to be consulted, because bdApps has two unrelated ways
-  // to be subscribed and each is invisible to the other's lookup:
+  // bdApps decides. checkBdappsSubscription asks every application we have a
+  // bridge for (carrier, and bKash when BDAPPS_BKASH_BASE is set), so a
+  // subscriber of either kind is visible here.
   //
-  //   check_subscription.php  carrier billing (Robi/Airtel), via getStatus
-  //   subscribers.php         bKash, which has no upstream status API at all
-  //
-  // Asking only the first reports every bKash subscriber as UNREGISTERED.
+  // The local bKash registry is read for the log line only, NOT to grant.
+  // It is our own file: the return endpoint used to write it on arrival and
+  // then read it back as proof, which meant a cancelled payment confirmed
+  // itself. Records written before that was fixed are still in there, so
+  // treating it as evidence would keep handing out PRO to people who never
+  // paid.
   const [carrier, bkash] = await Promise.all([
     checkBdappsSubscription(phone),
     checkBkashSubscriber(phone),
   ]);
 
-  const subscribed = carrier.subscribed || bkash.subscribed;
+  const subscribed = carrier.subscribed;
 
   // Neither source gave a usable answer. We do not know, so change nothing —
   // an outage must never read as "everybody unsubscribed".
   const carrierDefinite =
     carrier.subscribed || carrier.status === "NOT_REGISTERED";
-  if (!subscribed && !(carrierDefinite && bkash.reachable)) {
+  if (!subscribed && !carrierDefinite) {
     return {
       outcome: "GATEWAY_UNCLEAR",
       planName: currentPlan,
