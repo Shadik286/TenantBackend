@@ -122,9 +122,17 @@ export async function syncSubscriptionWithBdapps(
   }
 
   const check = { subscribed, status: subscribed ? "REGISTERED" : "NOT_REGISTERED" };
-  const sources = `carrier=${carrier.status} bkashStore=${
-    bkash.reachable ? "reachable" : "unreachable"
-  }`;
+  // Per-application, not just the merged verdict: the two bdApps applications
+  // answer differently for the same number (one E1951, the other S1000
+  // UNREGISTERED), and knowing which one said what is the difference between
+  // diagnosing this in a minute and guessing at it.
+  const perApplication = (carrier.detail ?? "")
+    .replace(/https?:\/\/[^/]+\//g, "")
+    .replace(/\/=/g, "=");
+  const sources =
+    `carrier=${carrier.status}` +
+    (perApplication ? ` [${perApplication}]` : "") +
+    ` bkashStore=${bkash.reachable ? "reachable" : "unreachable"}`;
 
   const now = new Date();
 
