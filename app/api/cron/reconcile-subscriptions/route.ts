@@ -4,6 +4,10 @@ import { syncSubscriptionWithBdapps } from "@/lib/plans/sync";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
+// Waits on the bdApps bridge, which answers in seconds rather than
+// milliseconds. The platform default would cut the call off before it
+// returns, which reads as "could not confirm" and leaves a payer on FREE.
+export const maxDuration = 30;
 
 // ---------------------------------------------------------------------------
 // GET /api/cron/reconcile-subscriptions

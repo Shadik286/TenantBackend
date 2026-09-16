@@ -83,8 +83,20 @@ function resolveBdappsBase(): string {
   return raw.replace(/\/+$/, "") + "/";
 }
 
-/** Give up quickly: a login must not hang on a slow third party. */
-const TIMEOUT_MS = 5000;
+/**
+ * How long to wait for the bridge.
+ *
+ * Was 5s, on the reasoning that a login must not hang on a slow third party.
+ * Measured: the same request takes ~2.3s from Bangladesh but times out at 5s
+ * from the serverless region, because check_subscription.php makes its own
+ * upstream call to bdApps before answering. The observed effect was
+ * `carrier=TIMEOUT` on every sync - so nobody could ever be confirmed, and a
+ * paying subscriber stayed on FREE.
+ *
+ * 12s is under the route's own 30s ceiling and still bounded. Tunable by env
+ * because it is a third-party host we do not control.
+ */
+const TIMEOUT_MS = Number(process.env.BDAPPS_TIMEOUT_MS ?? 12000);
 
 /**
  * How a failed or negative check is treated.
