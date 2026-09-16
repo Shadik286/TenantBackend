@@ -43,14 +43,13 @@ const cases: Array<{
     expect: "UNKNOWN",
   },
   {
-    // Captured live from our own bridge on 2026-09-17 (01700000000):
-    //   {"subscriptionStatus":"","isSubscribed":false,"apiError":true,
-    //    "statusCode":"E1951",
-    //    "statusDetail":"Format of the address is invalid Or User Already
-    //    UnRegistered", ...}
-    // This is how SDKRenten says "no", so it has to stay a definite no -
-    // otherwise nothing can ever downgrade a lapsed account.
-    name: "E1951 invalid address or already unregistered",
+    // Measured across both applications on 2026-09-17: /SDKRent%26Tenand/
+    // answers S1000 for the one number it knows and E1325 for every other,
+    // while /SDKRenten/ answers E1951 for all of them. An E-code is therefore
+    // "this application has never heard of this number" - the normal state of
+    // a bKash subscriber, whose billing getStatus cannot see - and must not
+    // read as a denial, or a paying bKash customer looks cancelled.
+    name: "E1951 subscriber unknown to this application",
     payload: {
       subscriptionStatus: "",
       isSubscribed: false,
@@ -59,18 +58,18 @@ const cases: Array<{
       statusDetail:
         "Format of the address is invalid Or User Already UnRegistered",
     },
-    expect: "NOT_REGISTERED",
+    expect: "UNKNOWN",
   },
   {
-    // The older capture, same meaning.
-    name: "E1325 invalid address format",
+    // Same meaning from the other application.
+    name: "E1325 subscriber unknown to this application",
     payload: {
       isSubscribed: false,
       subscriptionStatus: "",
       statusCode: "E1325",
       statusDetail: "Format of the address is invalid.",
     },
-    expect: "NOT_REGISTERED",
+    expect: "UNKNOWN",
   },
   {
     // A fact about our provisioning, not about the subscriber - a bKash

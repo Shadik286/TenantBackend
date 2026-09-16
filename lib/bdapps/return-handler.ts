@@ -204,12 +204,16 @@ export async function handleSubscriptionReturn(
       // bKash never shows up in getStatus, so the registry is the only place a
       // bKash subscription can be seen - see lib/plans/sync.ts for why it is
       // trustworthy now and was not before.
-      if (carrier.subscribed || bkash.subscribed) {
+      // Same order of authority as the nightly reconciliation: a definite
+      // UNREGISTERED from an application that knows this subscriber beats the
+      // local bKash list, which only speaks when bdApps has no opinion.
+      const bdappsSaysNo = carrier.status === "NOT_REGISTERED";
+      if (carrier.subscribed || (!bdappsSaysNo && bkash.subscribed)) {
         success = true;
         // Now it is a record of something confirmed, so keep it: it is the
         // only local trace of a bKash payment for support to work from.
         await recordBkashSubscriber(phone, request.nextUrl.search);
-      } else if (carrier.status === "NOT_REGISTERED" && bkash.reachable) {
+      } else if (bdappsSaysNo) {
         console.log("[subscription/return] bdApps does not show a subscription", {
           requestId,
           carrier: carrier.detail,

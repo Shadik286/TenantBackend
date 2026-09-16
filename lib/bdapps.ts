@@ -203,28 +203,28 @@ export function classify(
     return status === "UNREGISTERED" ? "NOT_REGISTERED" : "REGISTERED";
   }
 
-  // E1301 / E1343: this application is not provisioned for the number's
-  // operator. That is a fact about us, not about the subscriber - a bKash
-  // subscriber on an unsupported operator answers this way and is still
-  // paying - so it must never read as "not subscribed", or the nightly
-  // reconciliation would cancel them.
-  if (code === "E1301" || code === "E1343") return "UNKNOWN";
-
-  // Nothing readable in the body at all - no code, no status. That is a
-  // non-answer, not a no.
-  if (!code && !status) return "UNKNOWN";
-
-  // Everything else: the gateway answered, and not with a subscription.
+  // Everything below is an error code, and an error code is bdApps declining
+  // to answer rather than answering "no". Measured across both applications
+  // on the same day:
   //
-  // The reference web client calls every non-S1000 code "unknown", but it has
-  // no entitlement to protect. We do: "unknown" means the return route hands
-  // out PRO on the it-might-be-fine path AND the nightly reconciliation
-  // refuses to take it back, so an account granted this way would keep PRO
-  // forever. The observed non-subscriber answer from this bridge is E1951
-  // ("Format of the address is invalid Or User Already UnRegistered",
-  // captured live 2026-09-17 with the number echoed back intact), and E1325
-  // before it. A plain "no" is the honest reading of both.
-  return "NOT_REGISTERED";
+  //   number        /SDKRenten/   /SDKRent%26Tenand/
+  //   01817932639   E1951         S1000 UNREGISTERED
+  //   01787480582   E1951         E1325
+  //   01700000000   E1951         E1325
+  //
+  // One application returns S1000 for exactly one number and E1325 for the
+  // rest: it KNOWS that subscriber and does not know the others. So an
+  // E-code means "this application has never heard of this number", which is
+  // the normal state of a bKash subscriber - bKash billing is not visible to
+  // getStatus at all. Reading it as NOT_REGISTERED is what made a paying
+  // bKash customer look cancelled.
+  //
+  //   E1301 / E1343  application not provisioned for that operator
+  //   E1325 / E1951  subscriber unknown to this application
+  //
+  // Only S1000 UNREGISTERED above is a real "no", and only that is allowed to
+  // take PRO away.
+  return "UNKNOWN";
 }
 
 /**

@@ -103,14 +103,24 @@ export async function syncSubscriptionWithBdapps(
     checkBkashSubscriber(phone),
   ]);
 
-  const subscribed = carrier.subscribed || bkash.subscribed;
+  // bdApps outranks our own file. When an application that KNOWS this
+  // subscriber says UNREGISTERED, that is the answer, whatever the local
+  // bKash list still holds - a list entry outlives the subscription that
+  // created it, which is how a cancelled payment kept granting PRO to a
+  // number that had subscribed once before.
+  //
+  // The registry only speaks when bdApps has no opinion (every application
+  // answering an E-code, i.e. none of them has heard of the number), which is
+  // the normal state of a bKash subscriber.
+  const bdappsSaysNo = carrier.status === "NOT_REGISTERED";
+  const subscribed =
+    carrier.subscribed || (!bdappsSaysNo && bkash.subscribed);
 
   // Neither source gave a usable answer. We do not know, so change nothing —
   // an outage must never read as "everybody unsubscribed".
   // A downgrade needs BOTH sources to have answered. An unreachable registry
   // is not evidence that a bKash subscriber stopped paying.
-  const carrierDefinite =
-    carrier.subscribed || carrier.status === "NOT_REGISTERED";
+  const carrierDefinite = carrier.subscribed || bdappsSaysNo;
   if (!subscribed && !(carrierDefinite && bkash.reachable)) {
     return {
       outcome: "GATEWAY_UNCLEAR",
