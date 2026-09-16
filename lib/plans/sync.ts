@@ -111,6 +111,9 @@ export async function syncSubscriptionWithBdapps(
   }
 
   const check = { subscribed, status: subscribed ? "REGISTERED" : "NOT_REGISTERED" };
+  const sources = `carrier=${carrier.status} bkashStore=${
+    bkash.reachable ? "reachable" : "unreachable"
+  }`;
 
   const now = new Date();
 
@@ -140,7 +143,7 @@ export async function syncSubscriptionWithBdapps(
     // Already correct and not near expiry — leave the period alone rather
     // than silently extending it on every poll.
     if (stillValid) {
-      return { outcome: "ALREADY_CORRECT", planName: "PRO" };
+      return { outcome: "ALREADY_CORRECT", planName: "PRO", detail: sources };
     }
 
     await prisma.subscription.upsert({
@@ -175,7 +178,7 @@ export async function syncSubscriptionWithBdapps(
     subscription &&
     subscription.current_period_end.getTime() > now.getTime()
   ) {
-    return { outcome: "ALREADY_CORRECT", planName: currentPlan };
+    return { outcome: "ALREADY_CORRECT", planName: currentPlan, detail: sources };
   }
 
   const freePlan = await prisma.plan.findFirst({

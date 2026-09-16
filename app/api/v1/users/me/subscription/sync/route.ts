@@ -46,12 +46,24 @@ export async function POST() {
       "We could not reach the subscription service. Please try again shortly.",
   };
 
+  console.log("[subscription/sync]", {
+    userId: guard.userId,
+    outcome: result.outcome,
+    plan: result.planName,
+    detail: result.detail,
+  });
+
   return NextResponse.json({
     ok: true,
     data: {
       outcome: result.outcome,
       plan_name: result.planName,
       message: messages[result.outcome],
+      // Which source said what, e.g. "carrier=TIMEOUT bkashStore=reachable".
+      // No secrets in it, and without it an unclear answer cannot be chased
+      // down from outside the logs - which is how a working bridge and a
+      // failing call looked identical.
+      detail: result.detail ?? null,
     },
   });
 }
