@@ -112,33 +112,7 @@ export async function syncSubscriptionWithBdapps(
   // The registry only speaks when bdApps has no opinion (every application
   // answering an E-code, i.e. none of them has heard of the number), which is
   // the normal state of a bKash subscriber.
-  const bdappsSaysNo = carrier.status === "NOT_REGISTERED";
-
-  // bdApps decides, and nothing else does.
-  //
-  // The local bKash list is kept as a record and logged below, but it no
-  // longer grants: it is our own file, an entry outlives the subscription
-  // that created it, and reading it back as proof is what kept a cancelled
-  // payment on PRO.
-  const subscribed = carrier.subscribed;
-
-  // Neither source gave a usable answer. We do not know, so change nothing —
-  // an outage must never read as "everybody unsubscribed".
-  // A downgrade needs BOTH sources to have answered. An unreachable registry
-  // is not evidence that a bKash subscriber stopped paying.
-  const carrierDefinite = carrier.subscribed || bdappsSaysNo;
-  if (!subscribed && !(carrierDefinite && bkash.reachable)) {
-    return {
-      outcome: "GATEWAY_UNCLEAR",
-      planName: currentPlan,
-      detail: `carrier=${carrier.status} bkashStore=${
-        bkash.reachable ? "reachable" : "unreachable"
-      }`,
-    };
-  }
-
-  const check = { subscribed, status: subscribed ? "REGISTERED" : "NOT_REGISTERED" };
-  // Per-application, not just the merged verdict: the two bdApps applications
+  // Per-application, not just the merged verdict: two bdApps applications
   // answer differently for the same number (one E1951, the other S1000
   // UNREGISTERED), and knowing which one said what is the difference between
   // diagnosing this in a minute and guessing at it.
@@ -149,6 +123,26 @@ export async function syncSubscriptionWithBdapps(
     `carrier=${carrier.status}` +
     (perApplication ? ` [${perApplication}]` : "") +
     ` bkashStore=${bkash.reachable ? "reachable" : "unreachable"}`;
+  const bdappsSaysNo = carrier.status === "NOT_REGISTERED";
+
+  // bdApps decides, and nothing else does.
+  //
+  // The local bKash list is kept as a record and logged below, but it no
+  // longer grants: it is our own file, an entry outlives the subscription
+  // that created it, and reading it back as proof is what kept a cancelled
+  // payment on PRO.
+  const subscribed = carrier.subscribed;
+
+  // bdApps gave no usable answer, so we do not know: change nothing. An
+  // outage must never read as "everybody unsubscribed". The registry's
+  // reachability is no longer part of this - it stopped being an authority,
+  // so it cannot hold a downgrade up either.
+  const carrierDefinite = carrier.subscribed || bdappsSaysNo;
+  if (!subscribed && !carrierDefinite) {
+    return { outcome: "GATEWAY_UNCLEAR", planName: currentPlan, detail: sources };
+  }
+
+  const check = { subscribed, status: subscribed ? "REGISTERED" : "NOT_REGISTERED" };
 
   const now = new Date();
 
