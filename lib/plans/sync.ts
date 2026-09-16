@@ -113,8 +113,14 @@ export async function syncSubscriptionWithBdapps(
   // answering an E-code, i.e. none of them has heard of the number), which is
   // the normal state of a bKash subscriber.
   const bdappsSaysNo = carrier.status === "NOT_REGISTERED";
-  const subscribed =
-    carrier.subscribed || (!bdappsSaysNo && bkash.subscribed);
+
+  // bdApps decides, and nothing else does.
+  //
+  // The local bKash list is kept as a record and logged below, but it no
+  // longer grants: it is our own file, an entry outlives the subscription
+  // that created it, and reading it back as proof is what kept a cancelled
+  // payment on PRO.
+  const subscribed = carrier.subscribed;
 
   // Neither source gave a usable answer. We do not know, so change nothing —
   // an outage must never read as "everybody unsubscribed".

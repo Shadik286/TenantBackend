@@ -208,10 +208,39 @@ export async function handleSubscriptionReturn(
       // UNREGISTERED from an application that knows this subscriber beats the
       // local bKash list, which only speaks when bdApps has no opinion.
       const bdappsSaysNo = carrier.status === "NOT_REGISTERED";
-      if (carrier.subscribed || (!bdappsSaysNo && bkash.subscribed)) {
+
+      // How this return was reached, and therefore what it is worth.
+      //
+      // bdApps' own redirect carries no parameters at all, so an absent `src`
+      // means they sent the user here - which they only do once the payment
+      // completed. `success-page` means the app read their "successfully
+      // processed" screen, because that page promises a redirect and does not
+      // always perform one. Both are bdApps saying the payment happened.
+      //
+      // `manual` is the user pressing "I've paid". That is not evidence, and
+      // treating it as such is how cancelling the gateway still granted PRO.
+      const src = params.get("src");
+      const gatewaySaysPaid = src === null || src === "success-page";
+
+      // A bKash subscription exists nowhere upstream - no status API, which is
+      // why the reference project's return page records it locally and treats
+      // that record as the answer ever after. So for bKash, a return that
+      // bdApps stands behind IS the confirmation; there is nothing else to ask.
+      // Whether the gateway stands behind this return is recorded, but it is
+      // not what grants the plan: bdApps' answer to "is this number
+      // registered" is. Arriving here only decides whether it is worth
+      // asking them at all.
+      if (!gatewaySaysPaid) {
+        console.log("[subscription/return] user-asserted return, not a grant", {
+          requestId,
+          src,
+        });
+      }
+
+      if (carrier.subscribed) {
         success = true;
-        // Now it is a record of something confirmed, so keep it: it is the
-        // only local trace of a bKash payment for support to work from.
+        // The only local trace a bKash payment leaves, and what every later
+        // check reads.
         await recordBkashSubscriber(phone, request.nextUrl.search);
       } else if (bdappsSaysNo) {
         console.log("[subscription/return] bdApps does not show a subscription", {
