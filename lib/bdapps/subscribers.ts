@@ -126,3 +126,25 @@ export async function removeBkashSubscriber(phone: string): Promise<boolean> {
   });
   return data !== null;
 }
+
+/**
+ * bdApps' own last word on this number, from their subscription notification.
+ *
+ * Null when they have never told us anything about it. This is the only
+ * bKash-capable signal that originates with bdApps: getStatus answers for
+ * carrier billing only, and the bridge's subscriber file is a local list that
+ * anyone who reaches the return URL can append to - which is how a cancelled
+ * payment used to confirm itself.
+ */
+export async function lastBdappsNotification(
+  phone: string,
+): Promise<"REGISTERED" | "UNREGISTERED" | null> {
+  const { prisma } = await import("@/lib/prisma");
+  const latest = await prisma.bdappsSubscriptionEvent.findFirst({
+    where: { phone },
+    orderBy: { received_at: "desc" },
+    select: { status: true },
+  });
+  if (!latest) return null;
+  return latest.status === "REGISTERED" ? "REGISTERED" : "UNREGISTERED";
+}

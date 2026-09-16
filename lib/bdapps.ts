@@ -55,10 +55,15 @@ export const BDAPPS_BASE = resolveBdappsBase();
  * this is just [BDAPPS_BASE] and nothing changes.
  */
 export function bdappsStatusBases(): string[] {
+  // Measured, not assumed: `/SDKRenten/` answers E1951 for a number that
+  // `/SDKRent%26Tenand/` answers S1000 UNREGISTERED for. Two different codes
+  // for the same MSISDN means two different bdApps applications behind them,
+  // not the "older copy of the same scripts" the comments used to claim. The
+  // reference client keeps two bases for exactly this reason and asks both.
   const extra = (
     process.env.BDAPPS_BKASH_BASE ??
     process.env.Bdapps_Bkash_Base_URL ??
-    ""
+    "https://androidcontentapp.xyz/SDKRent%26Tenand/"
   ).trim();
   if (!extra) return [BDAPPS_BASE];
   const normalised = extra.replace(/\/+$/, "") + "/";

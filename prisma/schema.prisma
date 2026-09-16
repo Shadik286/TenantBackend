@@ -180,6 +180,41 @@ model SubscriptionAuthorization {
   @@index([user_id, status])
 }
 
+/// What bdApps told us, unprompted, about a subscription.
+///
+/// THE REASON THIS TABLE EXISTS
+///
+/// bdApps offers no way to ask about a bKash subscription. `getStatus` answers
+/// only for carrier billing - a real, paying bKash number comes back E1951
+/// "already unregistered" - and the bridge's own subscriber list is a plain
+/// local file whose `verified` flag is hardcoded false. So every bKash
+/// "confirmation" we had was really us reading back something we or the
+/// reference page had written, which is why a cancelled payment still granted
+/// PRO: the number was already on the list from a previous purchase.
+///
+/// The subscription notification is the one thing bdApps sends on its own
+/// account (see BkashBddapps/subscription_listener.php). Recording it here -
+/// in our database, not in a file anyone can POST to - makes "bdApps confirmed
+/// this" a fact we hold rather than an inference we make.
+model BdappsSubscriptionEvent {
+  id             String   @id @default(uuid())
+  /// Exactly what they sent, which is sometimes a plain MSISDN and sometimes
+  /// an opaque per-application token.
+  subscriber_id  String
+  /// Normalised to 01XXXXXXXXX when the subscriber id was a number we could
+  /// read, null when it was a token. Only rows with a phone can be matched.
+  phone          String?
+  /// REGISTERED or UNREGISTERED.
+  status         String
+  application_id String?
+  /// Their timestamp, kept verbatim.
+  time_stamp     String?
+  received_at    DateTime @default(now())
+
+  @@index([phone, received_at])
+  @@index([subscriber_id])
+}
+
 model Coupon {
   id               String    @id @default(uuid())
   code             String    @unique

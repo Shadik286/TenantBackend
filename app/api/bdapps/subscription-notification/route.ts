@@ -116,6 +116,20 @@ export async function POST(request: NextRequest) {
   }
 
   const phone = phoneFromSubscriberId(notification.subscriberId);
+
+  // Recorded before anything is acted on, and kept even when the number
+  // matches no account: this table is the only evidence that bdApps itself
+  // said anything, and support needs it whether or not we could use it.
+  await prisma.bdappsSubscriptionEvent.create({
+    data: {
+      subscriber_id: notification.subscriberId,
+      phone,
+      status: notification.status,
+      application_id: notification.applicationId,
+      time_stamp: notification.timeStamp,
+    },
+  });
+
   console.log("[bdapps/notification]", {
     status: notification.status,
     applicationId: notification.applicationId,
