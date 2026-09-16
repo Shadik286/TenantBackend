@@ -167,12 +167,16 @@ export async function syncSubscriptionWithBdapps(
       },
     });
 
-    return { outcome: wasPro ? "RENEWED" : "UPGRADED", planName: "PRO" };
+    return {
+      outcome: wasPro ? "RENEWED" : "UPGRADED",
+      planName: "PRO",
+      detail: sources,
+    };
   }
 
   // A definite NOT_REGISTERED.
   if (currentPlan === "FREE") {
-    return { outcome: "ALREADY_CORRECT", planName: "FREE" };
+    return { outcome: "ALREADY_CORRECT", planName: "FREE", detail: sources };
   }
 
   // Only downgrade once the paid period has actually run out. Someone who
@@ -199,7 +203,7 @@ export async function syncSubscriptionWithBdapps(
     data: { plan_id: freePlan.id, status: "CANCELLED", cancelled_at: now },
   });
 
-  return { outcome: "DOWNGRADED", planName: "FREE" };
+  return { outcome: "DOWNGRADED", planName: "FREE", detail: sources };
 }
 
 /**
