@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { Prisma } from "@prisma/client";
 import { requireUserId } from "@/lib/require-user";
 import { prisma } from "@/lib/prisma";
+import { blockIfOverLimit } from "@/lib/plans/over-limit";
 
 export const runtime = "nodejs";
 
@@ -53,6 +54,12 @@ export async function POST(request: NextRequest) {
   const guard = await requireUserId();
   if ("response" in guard) return guard.response;
   const ownerId = guard.userId;
+
+  // A lapsed PRO account holding more than the free tier allows is
+  // read-only (deletes aside) until it is trimmed back inside the caps.
+  // See lib/plans/over-limit.ts.
+  const overLimit = await blockIfOverLimit(ownerId);
+  if (overLimit) return overLimit;
 
   let body: { houseId?: string; month?: string; defaultAmount?: string | number };
   try {

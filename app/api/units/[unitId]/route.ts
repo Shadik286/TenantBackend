@@ -3,6 +3,7 @@ import { z } from "zod";
 import { Prisma } from "@prisma/client";
 import { requireUserId } from "@/lib/require-user";
 import { prisma } from "@/lib/prisma";
+import { blockIfOverLimit } from "@/lib/plans/over-limit";
 
 // Soft-delete a unit + terminate its active leases. Edit monthly rent by
 // opening a new RentRate row and closing the previous one in the same tx.
@@ -46,6 +47,12 @@ export async function PATCH(
   const guard = await requireUserId();
   if ("response" in guard) return guard.response;
   const ownerId = guard.userId;
+
+  // A lapsed PRO account holding more than the free tier allows is
+  // read-only (deletes aside) until it is trimmed back inside the caps.
+  // See lib/plans/over-limit.ts.
+  const overLimit = await blockIfOverLimit(ownerId);
+  if (overLimit) return overLimit;
 
   const { unitId } = await context.params;
 

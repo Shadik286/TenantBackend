@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { requireUserId } from "@/lib/require-user";
 import { prisma } from "@/lib/prisma";
 import { getPlanForOwner } from "@/lib/plans/get-plan";
+import { blockIfOverLimit } from "@/lib/plans/over-limit";
 
 export const runtime = "nodejs";
 
@@ -82,6 +83,13 @@ export async function POST(request: NextRequest) {
 
   // Plan-limit check before insert. Soft-deleted houses do NOT count against
   // the limit, matching the architecture's free-tier rule.
+  // An account already over its plan (usually a lapsed PRO) cannot create
+  // anything until it is back inside the limits. Checked before the
+  // house-specific cap below, because being over on tenants should block a
+  // new house too — otherwise a lapsed user keeps growing sideways.
+  const overLimit = await blockIfOverLimit(ownerId);
+  if (overLimit) return overLimit;
+
   const [activeCount, plan] = await Promise.all([
     prisma.house.count({ where: { owner_id: ownerId, deleted_at: null } }),
     getPlanForOwner(ownerId),

@@ -26,10 +26,37 @@
  */
 
 /**
- * Gateway base. Mirrors `kBdappsBase` in the Flutter client
- * (`lib/auth_service.dart`) — note the URL-encoded `&` in the path segment.
+ * Base URL of the PHP bridge that fronts bdApps (the scripts in
+ * `BkashBddapps/`: check_subscription.php, send_otp.php, verify_otp.php,
+ * unsubscribe.php).
+ *
+ * `/SDKRent%26Tenand/` also answers on that host and returns byte-identical
+ * JSON, but it is an older copy of the same scripts. `/SDKRenten/` is the
+ * canonical path, and pointing at the stale one would mean quietly running
+ * against code nobody is updating.
+ *
+ * Overridable by env so a move does not need a redeploy — this is a
+ * third-party host we do not control.
  */
-const BDAPPS_BASE = "https://androidcontentapp.xyz/SDKRent%26Tenand/";
+export const BDAPPS_BASE = resolveBdappsBase();
+
+function resolveBdappsBase(): string {
+  // `Bdapps_Base_URL` is the spelling used in Vercel. `process.env` is
+  // case-sensitive, so the exact casing has to be read; the uppercase forms
+  // are accepted too so the name can be tidied later without breaking a
+  // running deployment.
+  const raw =
+    process.env.Bdapps_Base_URL ??
+    process.env.BDAPPS_BASE_URL ??
+    process.env.BDAPPS_BRIDGE_BASE ??
+    "https://androidcontentapp.xyz/SDKRenten/";
+
+  // Collapse any trailing slashes to exactly one. The value in Vercel ends
+  // with `//`, which would build `SDKRenten//check_subscription.php` — that
+  // happens to work on this host, but it is luck rather than design and a
+  // stricter server would 404 on it.
+  return raw.replace(/\/+$/, "") + "/";
+}
 
 /** Give up quickly: a login must not hang on a slow third party. */
 const TIMEOUT_MS = 5000;
@@ -97,22 +124,65 @@ export type BdappsCheckResult = {
  *   - `statusCode: "E1351"`  (send_otp refusing: already registered)
  *   - a message containing "already registered"
  *
- * Deliberately strict: only an affirmative signal counts as subscribed.
- * Anything unrecognised is NOT_REGISTERED, which in "log" mode is harmless and
- * in "enforce" mode fails closed.
+ * Three outcomes, not two - the same distinction the reference web client
+ * draws. Only an explicit UNREGISTERED under a success code is a "no";
+ * an unanswered or errored check is UNKNOWN, and no caller may act on it.
  */
-function looksRegistered(data: Record<string, unknown>): boolean {
-  // Most direct signal, seen in the live payload above.
-  if (data.isSubscribed === true || data.isSubscribed === "true") return true;
+export function classify(
+  data: Record<string, unknown>,
+): "REGISTERED" | "NOT_REGISTERED" | "UNKNOWN" {
+  // Most direct signal, seen in the live payload above. Note that the bridge
+  // computes it as `subscriptionStatus === "REGISTERED"`, so `false` is not a
+  // verdict on its own - the status below has to be read as well.
+  if (data.isSubscribed === true || data.isSubscribed === "true") {
+    return "REGISTERED";
+  }
 
-  const status = String(data.subscriptionStatus ?? "").toUpperCase();
-  if (status === "REGISTERED") return true;
-  if (String(data.statusCode ?? "") === "E1351") return true;
+  const code = String(data.statusCode ?? "");
+  const status = String(data.subscriptionStatus ?? "").trim().toUpperCase();
+  const message = String(data.message ?? data.statusDetail ?? "").toLowerCase();
 
-  const message = String(
-    data.message ?? data.statusDetail ?? "",
-  ).toLowerCase();
-  return message.includes("already registered");
+  // send_otp refusing because the number is already on a subscription.
+  if (code === "E1351" || message.includes("already registered")) {
+    return "REGISTERED";
+  }
+
+  // A plain REGISTERED, whatever code came with it.
+  if (status === "REGISTERED") return "REGISTERED";
+
+  if (code === "S1000") {
+    // bdApps answered. An empty status with a success code tells us nothing,
+    // and must not be read as "no".
+    if (!status) return "UNKNOWN";
+    // Anything that is not an explicit UNREGISTERED is a subscription that
+    // exists. This matters right after a payment: bdApps reports states like
+    // "INITIAL CHARGING PENDING" while the first charge settles, and reading
+    // those as "not subscribed" leaves someone who has just paid on FREE.
+    return status === "UNREGISTERED" ? "NOT_REGISTERED" : "REGISTERED";
+  }
+
+  // E1301 / E1343: this application is not provisioned for the number's
+  // operator. That is a fact about us, not about the subscriber - a bKash
+  // subscriber on an unsupported operator answers this way and is still
+  // paying - so it must never read as "not subscribed", or the nightly
+  // reconciliation would cancel them.
+  if (code === "E1301" || code === "E1343") return "UNKNOWN";
+
+  // Nothing readable in the body at all - no code, no status. That is a
+  // non-answer, not a no.
+  if (!code && !status) return "UNKNOWN";
+
+  // Everything else: the gateway answered, and not with a subscription.
+  //
+  // The reference web client calls every non-S1000 code "unknown", but it has
+  // no entitlement to protect. We do: "unknown" means the return route hands
+  // out PRO on the it-might-be-fine path AND the nightly reconciliation
+  // refuses to take it back, so an account granted this way would keep PRO
+  // forever. The observed non-subscriber answer from this bridge is E1951
+  // ("Format of the address is invalid Or User Already UnRegistered",
+  // captured live 2026-09-17 with the number echoed back intact), and E1325
+  // before it. A plain "no" is the honest reading of both.
+  return "NOT_REGISTERED";
 }
 
 /**
@@ -161,10 +231,12 @@ export async function checkBdappsSubscription(
       };
     }
 
-    const registered = looksRegistered(data);
+    const verdict = classify(data);
     return {
-      subscribed: registered,
-      status: registered ? "REGISTERED" : "NOT_REGISTERED",
+      subscribed: verdict === "REGISTERED",
+      // UNKNOWN is reported as GATEWAY_ERROR so every caller's existing
+      // "we could not tell" branch covers it: no downgrade, no login refusal.
+      status: verdict === "UNKNOWN" ? "GATEWAY_ERROR" : verdict,
       detail: text.slice(0, 200),
     };
   } catch (err) {

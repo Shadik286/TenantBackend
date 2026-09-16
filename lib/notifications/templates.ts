@@ -73,7 +73,7 @@ function esc(value: string): string {
  * and a table-based layout is what survives both.
  */
 function wrap(bodyHtml: string, footerHtml: string): string {
-  return `<!-- rendered by PropTrack -->
+  return `<!-- rendered by Renten -->
 <div style="font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Arial,sans-serif;background:#f8f9fb;padding:24px 12px;">
   <table role="presentation" cellpadding="0" cellspacing="0" width="100%" style="max-width:560px;margin:0 auto;background:#ffffff;border-radius:14px;border:1px solid #e5e7eb;">
     <tr><td style="padding:28px 28px 8px 28px;">${bodyHtml}</td></tr>
@@ -93,8 +93,8 @@ function wrap(bodyHtml: string, footerHtml: string): string {
 function footer(sender: SenderContext, bengali: boolean): string {
   const who = esc(sender.landlordName);
   return bengali
-    ? `এই বার্তাটি <strong>${who}</strong> পাঠিয়েছেন PropTrack-এর মাধ্যমে, কারণ আপনি তাঁর একজন ভাড়াটিয়া হিসেবে তালিকাভুক্ত। কোনো প্রশ্ন থাকলে সরাসরি তাঁর সঙ্গে যোগাযোগ করুন।`
-    : `Sent by <strong>${who}</strong> via PropTrack because you are listed as their tenant. For any questions, please contact them directly.`;
+    ? `এই বার্তাটি <strong>${who}</strong> পাঠিয়েছেন Renten-এর মাধ্যমে, কারণ আপনি তাঁর একজন ভাড়াটিয়া হিসেবে তালিকাভুক্ত। কোনো প্রশ্ন থাকলে সরাসরি তাঁর সঙ্গে যোগাযোগ করুন।`
+    : `Sent by <strong>${who}</strong> via Renten because you are listed as their tenant. For any questions, please contact them directly.`;
 }
 
 function renderAssignment(
@@ -150,8 +150,8 @@ function renderAssignment(
     deposit ? `${bn ? "জামানত" : "Security deposit"}: ${deposit}` : null,
     "",
     bn
-      ? `পাঠিয়েছেন ${sender.landlordName} — PropTrack`
-      : `Sent by ${sender.landlordName} via PropTrack`,
+      ? `পাঠিয়েছেন ${sender.landlordName} — Renten`
+      : `Sent by ${sender.landlordName} via Renten`,
   ].filter(Boolean) as string[];
 
   return { subject, html, text: textLines.join("\n") };
@@ -247,8 +247,8 @@ function renderPaymentReceipt(
     p.referenceNo ? `${bn ? "রেফারেন্স" : "Reference"}: ${p.referenceNo}` : null,
     "",
     bn
-      ? `পাঠিয়েছেন ${sender.landlordName} — PropTrack`
-      : `Sent by ${sender.landlordName} via PropTrack`,
+      ? `পাঠিয়েছেন ${sender.landlordName} — Renten`
+      : `Sent by ${sender.landlordName} via Renten`,
   ].filter(Boolean) as string[];
 
   return { subject, html, text: textLines.join("\n") };

@@ -168,6 +168,39 @@ export async function getPlanForOwner(ownerId: string): Promise<OwnerPlan> {
   }
 
   const plan = subscription.plan;
+
+  // A lapsed paid plan falls back to FREE limits.
+  //
+  // `current_period_end` was written by every signup and renewal but read by
+  // nothing, so a PRO subscription kept PRO limits forever once granted —
+  // whether or not the user ever paid again.
+  //
+  // FREE is explicitly exempt: it has no period worth honouring, and the free
+  // tier is lifetime. 3 properties-worth of limits, for as long as they want,
+  // with no trial clock. Expiring it would be the opposite of the intent.
+  const expired =
+    plan.name !== "FREE" &&
+    subscription.current_period_end.getTime() < Date.now();
+
+  if (expired && freePlan) {
+    return {
+      planName: freePlan.name,
+      planId: freePlan.id,
+      maxHouses: freePlan.max_houses,
+      maxUnitsPerHouse: freePlan.max_units_per_house,
+      maxTenants: freePlan.max_tenants,
+      trialDays: freePlan.trial_days,
+      isUnlimitedHouses: freePlan.max_houses >= UNLIMITED_SENTINEL,
+      isUnlimitedUnitsPerHouse:
+        freePlan.max_units_per_house >= UNLIMITED_SENTINEL,
+      isUnlimitedTenants: freePlan.max_tenants >= UNLIMITED_SENTINEL,
+      isPro: false,
+      status: "EXPIRED",
+      source: "default",
+      couponExpiresAt: null,
+    };
+  }
+
   return {
     planName: plan.name,
     planId: plan.id,

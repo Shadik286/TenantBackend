@@ -89,6 +89,19 @@ export const RATE_LIMITS = {
    * accounts to widen it, and every attempt is attributable.
    */
   couponRedeem: { limit: 5, windowSeconds: 60 * 60 },
+  /**
+   * Starting a bdApps subscription. Each attempt writes a row and sends a
+   * person to a payment page, so a stuck client retrying in a loop would both
+   * fill the table and hammer the gateway. Loose enough that a user who
+   * abandons the flow a few times and comes back is never blocked.
+   */
+  subscriptionAuthorize: { limit: 10, windowSeconds: 60 * 60 },
+  /**
+   * "I paid but the app says Free" recovery. Each call reaches the bdApps
+   * bridge, so it is capped — but generously, because the person pressing it
+   * has already paid and is not in a mood to be told to wait.
+   */
+  subscriptionSync: { limit: 12, windowSeconds: 60 * 60 },
 } as const satisfies Record<string, RateLimitRule>;
 
 export type RateLimitResult = {

@@ -16,3 +16,9 @@ scripts/*-out.txt
 .vercel
 .env*
 _debug_token.txt
+
+# One-off capture files from manual curl/debug runs. `_tok.txt` has held a
+# live session token before now, so these must never be committed.
+_tok.txt
+body.txt
+headers.txt

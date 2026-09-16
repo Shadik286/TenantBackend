@@ -102,6 +102,7 @@ model User {
   preference     UserPreference?
   refresh_tokens     RefreshToken[]
   coupon_redemptions CouponRedemption[]
+  subscription_auths SubscriptionAuthorization[]
 
   @@index([email])
   @@index([is_active, deleted_at])
@@ -141,6 +142,44 @@ enum CouponType {
 /// `scripts/coupons.ts`. A guessable code attached to a free-PRO grant is an
 /// open till, and walking a coupon namespace is a standard attack, which is
 /// also why redemption is rate limited per user.
+enum SubscriptionAuthStatus {
+  PENDING
+  SUCCESS
+  FAILED
+}
+
+/// One attempt to subscribe through the bdApps gateway.
+///
+/// The gateway sends the user off to `user.bdapps.com`, then bounces them back
+/// to `redirectUrl` with a result. That return carries a `requestId` and
+/// nothing that proves who the person is — our session cookie does not survive
+/// the round trip through an external site on mobile. So the mapping from
+/// requestId to user has to be written down BEFORE the user leaves, and this
+/// is that record.
+///
+/// `request_id` is unique, which is also what makes the return idempotent: a
+/// user who refreshes the return page, or a gateway that retries it, cannot
+/// grant a second subscription period.
+model SubscriptionAuthorization {
+  id           String                 @id @default(uuid())
+  user_id      String
+  /// The `requestId` we sent to the gateway. Unique per attempt.
+  request_id   String                 @unique
+  /// The exact `requestTime` string that was signed. Kept verbatim because
+  /// the signature is over the string, not over a parsed date.
+  request_time String
+  status       SubscriptionAuthStatus @default(PENDING)
+  plan_name    String                 @default("PRO")
+  /// Whatever the gateway put on the return URL, for support and debugging.
+  return_payload Json?
+  created_at   DateTime               @default(now())
+  completed_at DateTime?
+
+  user User @relation(fields: [user_id], references: [id], onDelete: Cascade)
+
+  @@index([user_id, status])
+}
+
 model Coupon {
   id               String    @id @default(uuid())
   code             String    @unique

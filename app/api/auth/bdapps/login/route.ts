@@ -23,7 +23,7 @@ export const dynamic = "force-dynamic";
 // bdapps-format login
 // ---------------------------------------------------------------------------
 //
-// The bdapps gateway (androidcontentapp.xyz / Weather365SDK) handles the
+// The bdapps gateway (androidcontentapp.xyz / SDKRenten, see BDAPPS_BASE) handles the
 // subscription check, the OTP request, and the OTP verification entirely
 // client-side. Our backend is NEVER involved in those steps — there is no
 // `verify_otp.php` round-trip here, we don't re-check the subscription, and

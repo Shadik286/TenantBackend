@@ -4,6 +4,7 @@ import { Prisma } from "@prisma/client";
 import { requireUserId } from "@/lib/require-user";
 import { prisma } from "@/lib/prisma";
 import { getPlanForOwner } from "@/lib/plans/get-plan";
+import { blockIfOverLimit } from "@/lib/plans/over-limit";
 
 const CreateUnitSchema = z.object({
   name: z.string().min(1).max(80),
@@ -109,6 +110,11 @@ export async function POST(
   if (!house) {
     return NextResponse.json({ error: "HOUSE_NOT_FOUND" }, { status: 404 });
   }
+  // An account already over its plan cannot create anything until it is back
+  // inside the limits — see lib/plans/over-limit.ts.
+  const overLimit = await blockIfOverLimit(ownerId);
+  if (overLimit) return overLimit;
+
   const plan = await getPlanForOwner(ownerId);
   const activeUnitsCount = await prisma.unit.count({
     where: { house_id: houseId, deleted_at: null },

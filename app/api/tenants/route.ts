@@ -3,6 +3,7 @@ import { requireUserId } from "@/lib/require-user";
 import { prisma } from "@/lib/prisma";
 import { notifyLeaseAssignment } from "@/lib/notifications";
 import { getPlanForOwner } from "@/lib/plans/get-plan";
+import { blockIfOverLimit } from "@/lib/plans/over-limit";
 
 export const runtime = "nodejs";
 
@@ -223,6 +224,11 @@ export async function POST(request: NextRequest) {
   // house and unit checks accept. Serialising it would cost a held
   // connection on every tenant create to prevent an off-by-one in a limit
   // the user can lift by upgrading.
+  // An account already over its plan cannot create anything until it is back
+  // inside the limits — see lib/plans/over-limit.ts.
+  const overLimit = await blockIfOverLimit(ownerId);
+  if (overLimit) return overLimit;
+
   const [plan, activeTenantCount] = await Promise.all([
     getPlanForOwner(ownerId),
     prisma.tenant.count({ where: { owner_id: ownerId, deleted_at: null } }),
