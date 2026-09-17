@@ -49,7 +49,12 @@ export async function GET(request: NextRequest) {
 
   const record = await prisma.subscriptionAuthorization.findFirst({
     where: { request_id: requestId, user_id: guard.userId },
-    select: { status: true, plan_name: true, completed_at: true },
+    select: {
+      status: true,
+      plan_name: true,
+      completed_at: true,
+      created_at: true,
+    },
   });
 
   if (!record) {
@@ -68,7 +73,7 @@ export async function GET(request: NextRequest) {
       where: { id: guard.userId },
       select: { phone: true },
     });
-    otpSent = await otpRecentlySent(user?.phone);
+    otpSent = await otpRecentlySent(user?.phone, record.created_at);
   }
 
   return NextResponse.json({

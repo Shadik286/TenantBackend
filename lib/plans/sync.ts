@@ -120,10 +120,24 @@ export async function syncSubscriptionWithBdapps(
 
   // getStatus first: it is free and texts nobody. Only when it cannot confirm
   // is bdApps asked the way that works for bKash.
-  const carrier =
-    statusCheck.subscribed || !options.probeWithOtp
-      ? statusCheck
-      : await probeRegistrationViaOtp(phone);
+  //
+  // The probe is scoped to the attempt being polled - the user's latest one,
+  // if it is recent - so a new payment asks bdApps afresh instead of
+  // inheriting the answer an earlier attempt got.
+  let carrier = statusCheck;
+  if (!statusCheck.subscribed && options.probeWithOtp) {
+    const attempt = await prisma.subscriptionAuthorization.findFirst({
+      where: {
+        user_id: userId,
+        created_at: { gte: new Date(Date.now() - 60 * 60 * 1000) },
+      },
+      orderBy: { created_at: "desc" },
+      select: { created_at: true },
+    });
+    carrier = await probeRegistrationViaOtp(phone, {
+      attemptStartedAt: attempt?.created_at,
+    });
+  }
 
   // bdApps outranks our own file. When an application that KNOWS this
   // subscriber says UNREGISTERED, that is the answer, whatever the local

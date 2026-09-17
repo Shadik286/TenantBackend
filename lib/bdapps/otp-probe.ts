@@ -95,13 +95,28 @@ async function releaseProbeLock(phone: string): Promise<void> {
     .catch(() => undefined);
 }
 
+/**
+ * The earliest verdict worth reusing.
+ *
+ * A verdict answers the question for one payment attempt. Reusing one from an
+ * EARLIER attempt is wrong twice over: the user may have paid since, and a
+ * failed attempt gets no OTP - which is what happened when a cancel within ten
+ * minutes of the previous one silently inherited its answer. So when the
+ * attempt is known, nothing from before it counts.
+ */
+function reuseSince(notBefore?: Date): Date {
+  const window = new Date(Date.now() - PROBE_REUSE_MS);
+  return notBefore && notBefore > window ? notBefore : window;
+}
+
 async function waitForWinner(
   phone: string,
+  notBefore?: Date,
 ): Promise<"REGISTERED" | "UNREGISTERED" | null> {
   const deadline = Date.now() + WAIT_FOR_WINNER_MS;
   while (Date.now() < deadline) {
     await new Promise((r) => setTimeout(r, 750));
-    const verdict = await recentVerdict(phone);
+    const verdict = await recentVerdict(phone, notBefore);
     if (verdict) return verdict;
   }
   return null;
@@ -120,8 +135,9 @@ function fromVerdict(
 
 async function recentVerdict(
   phone: string,
+  notBefore?: Date,
 ): Promise<"REGISTERED" | "UNREGISTERED" | null> {
-  const since = new Date(Date.now() - PROBE_REUSE_MS);
+  const since = reuseSince(notBefore);
   const latest = await prisma.bdappsSubscriptionEvent.findFirst({
     where: { phone, source: SOURCE, received_at: { gte: since } },
     orderBy: { received_at: "desc" },
@@ -137,16 +153,28 @@ async function recentVerdict(
  * Never throws. A definite answer is recorded; an unclear one is not, so the
  * next caller asks again rather than inheriting a non-answer.
  */
+export type ProbeOptions = {
+  /**
+   * When the payment attempt being settled started. Verdicts from before it
+   * are not reused, so each attempt asks bdApps once - and a failed one gets
+   * its OTP - while the several checks within one attempt still share a
+   * single answer.
+   */
+  attemptStartedAt?: Date;
+};
+
 export async function probeRegistrationViaOtp(
   phone: string,
+  options: ProbeOptions = {},
 ): Promise<BdappsCheckResult> {
-  const reused = await recentVerdict(phone);
+  const notBefore = options.attemptStartedAt;
+  const reused = await recentVerdict(phone, notBefore);
   if (reused) return fromVerdict(reused, "reused");
 
   // Someone else is asking right now. Wait for their answer rather than
   // asking too - asking is what sends the second text.
   if (!(await acquireProbeLock(phone))) {
-    const theirs = await waitForWinner(phone);
+    const theirs = await waitForWinner(phone, notBefore);
     if (theirs) return fromVerdict(theirs, "waited");
     return {
       subscribed: false,
@@ -158,7 +186,7 @@ export async function probeRegistrationViaOtp(
   try {
     // Checked again under the lock: the previous holder may have finished
     // between our first look and taking the lock.
-    const justDecided = await recentVerdict(phone);
+    const justDecided = await recentVerdict(phone, notBefore);
     if (justDecided) return fromVerdict(justDecided, "reused");
     return await askBdapps(phone);
   } finally {
@@ -251,10 +279,10 @@ async function askBdapps(phone: string): Promise<BdappsCheckResult> {
  */
 export async function otpRecentlySent(
   phone: string | null | undefined,
-  withinMs: number = PROBE_REUSE_MS,
+  attemptStartedAt?: Date,
 ): Promise<boolean> {
   if (!phone) return false;
-  const since = new Date(Date.now() - withinMs);
+  const since = reuseSince(attemptStartedAt);
   const hit = await prisma.bdappsSubscriptionEvent.findFirst({
     where: {
       phone,

@@ -207,7 +207,9 @@ export async function handleSubscriptionReturn(
       const statusCheck = await checkBdappsSubscription(phone);
       const carrier = statusCheck.subscribed
         ? statusCheck
-        : await probeRegistrationViaOtp(phone);
+        : await probeRegistrationViaOtp(phone, {
+            attemptStartedAt: record.created_at,
+          });
       const bkash = await checkBkashSubscriber(phone);
 
       // bKash never shows up in getStatus, so the registry is the only place a
