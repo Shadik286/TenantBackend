@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { otpRecentlySent } from "@/lib/bdapps/otp-probe";
+import { otpOutcomeSince } from "@/lib/bdapps/otp-probe";
 import { requireUserId } from "@/lib/require-user";
 import { prisma } from "@/lib/prisma";
 import {
@@ -68,12 +68,15 @@ export async function GET(request: NextRequest) {
   // which texts a non-subscriber a code. Tell the app, so it can explain that
   // text instead of leaving the user with an unexplained OTP.
   let otpSent = false;
+  let otpLimitReached = false;
   if (record.status !== "SUCCESS") {
     const user = await prisma.user.findUnique({
       where: { id: guard.userId },
       select: { phone: true },
     });
-    otpSent = await otpRecentlySent(user?.phone, record.created_at);
+    const outcome = await otpOutcomeSince(user?.phone, record.created_at);
+    otpSent = outcome.sent;
+    otpLimitReached = outcome.limitReached;
   }
 
   return NextResponse.json({
@@ -83,6 +86,8 @@ export async function GET(request: NextRequest) {
       plan_name: record.plan_name,
       completed_at: record.completed_at?.toISOString() ?? null,
       otp_sent: otpSent,
+      // bdApps will not send this number any more OTPs today.
+      otp_limit_reached: otpLimitReached,
     },
   });
 }

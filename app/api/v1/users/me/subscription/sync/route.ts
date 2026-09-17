@@ -56,7 +56,10 @@ export async function POST() {
 
   const probeTextedThem =
     result.planName !== "PRO" &&
-    /otp-probe=(UNREGISTERED|OTP-ISSUED)/.test(result.detail ?? "");
+    // OTP-LIMIT too: bdApps refused to send yet another code, but only
+    // because this number has already been sent some - and it is still a
+    // payment that did not go through.
+    /otp-probe=(UNREGISTERED|OTP-ISSUED|OTP-LIMIT)/.test(result.detail ?? "");
 
   console.log("[subscription/sync]", {
     userId: guard.userId,
@@ -79,6 +82,10 @@ export async function POST() {
       // True when the check texted this user an OTP - they are not
       // subscribed - so the app can say the code is safe to ignore.
       otp_sent: probeTextedThem,
+      // bdApps will not send this number any more OTPs today (E1853).
+      otp_limit_reached:
+        result.planName !== "PRO" &&
+        /otp-probe=OTP-LIMIT/.test(result.detail ?? ""),
     },
   });
 }

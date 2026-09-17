@@ -137,6 +137,19 @@ const otpCases: typeof cases = [
     expect: "NOT_REGISTERED",
   },
   {
+    // Captured live 2026-09-17 11:33: bdApps throttling OTPs for a number that
+    // was not subscribed. It checks registration first (the same number
+    // answered E1351 once subscribed, while still throttled), so this is a no.
+    name: "OTP limit reached means not subscribed",
+    payload: {
+      statusDetail:
+        "Maximum number of OTP requests reached for [Renten/tel:8801817932639]",
+      version: "1.0",
+      statusCode: "E1853",
+    },
+    expect: "NOT_REGISTERED",
+  },
+  {
     name: "OTP refused for an unprovisioned operator says nothing",
     payload: {
       success: false,

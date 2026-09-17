@@ -56,6 +56,15 @@ export function classifyOtpProbe(
     return "REGISTERED";
   }
 
+  // "Maximum number of OTP requests reached for [Renten/tel:...]". bdApps
+  // checks registration BEFORE this limit - observed live, the same number
+  // answered E1853 three times and then E1351 the moment it subscribed - so
+  // being throttled means an OTP would have been issued: not registered. No
+  // SMS goes out in this case.
+  if (code === "E1853" || message.includes("maximum number of otp")) {
+    return "NOT_REGISTERED";
+  }
+
   const issued =
     data.success === true ||
     (typeof data.referenceNo === "string" && data.referenceNo.trim() !== "");
@@ -112,7 +121,7 @@ function reuseSince(notBefore?: Date): Date {
 async function waitForWinner(
   phone: string,
   notBefore?: Date,
-): Promise<"REGISTERED" | "UNREGISTERED" | null> {
+): Promise<Verdict | null> {
   const deadline = Date.now() + WAIT_FOR_WINNER_MS;
   while (Date.now() < deadline) {
     await new Promise((r) => setTimeout(r, 750));
@@ -122,10 +131,7 @@ async function waitForWinner(
   return null;
 }
 
-function fromVerdict(
-  verdict: "REGISTERED" | "UNREGISTERED",
-  how: string,
-): BdappsCheckResult {
+function fromVerdict(verdict: Verdict, how: string): BdappsCheckResult {
   return {
     subscribed: verdict === "REGISTERED",
     status: verdict === "REGISTERED" ? "REGISTERED" : "NOT_REGISTERED",
@@ -133,18 +139,23 @@ function fromVerdict(
   };
 }
 
+type Verdict = "REGISTERED" | "UNREGISTERED" | "OTP-LIMIT";
+
 async function recentVerdict(
   phone: string,
   notBefore?: Date,
-): Promise<"REGISTERED" | "UNREGISTERED" | null> {
+): Promise<Verdict | null> {
   const since = reuseSince(notBefore);
   const latest = await prisma.bdappsSubscriptionEvent.findFirst({
     where: { phone, source: SOURCE, received_at: { gte: since } },
     orderBy: { received_at: "desc" },
-    select: { status: true },
+    select: { status: true, time_stamp: true },
   });
   if (!latest) return null;
-  return latest.status === "REGISTERED" ? "REGISTERED" : "UNREGISTERED";
+  if (latest.status === "REGISTERED") return "REGISTERED";
+  // Kept distinct on reuse: "not registered, and bdApps will not send this
+  // number any more codes today" is what the app needs to tell the user.
+  return latest.time_stamp === "E1853" ? "OTP-LIMIT" : "UNREGISTERED";
 }
 
 /**
@@ -249,7 +260,7 @@ async function askBdapps(phone: string): Promise<BdappsCheckResult> {
       return {
         subscribed: false,
         status: "NOT_REGISTERED",
-        detail: "otp-probe=OTP-ISSUED",
+        detail: code === "E1853" ? "otp-probe=OTP-LIMIT" : "otp-probe=OTP-ISSUED",
       };
     }
     return {
@@ -281,16 +292,31 @@ export async function otpRecentlySent(
   phone: string | null | undefined,
   attemptStartedAt?: Date,
 ): Promise<boolean> {
-  if (!phone) return false;
+  return (await otpOutcomeSince(phone, attemptStartedAt)).sent;
+}
+
+/**
+ * What asking bdApps did to this number during the attempt: whether a
+ * not-registered answer came back (and so an OTP went out), and whether
+ * bdApps refused because the number hit its daily OTP limit.
+ */
+export async function otpOutcomeSince(
+  phone: string | null | undefined,
+  attemptStartedAt?: Date,
+): Promise<{ sent: boolean; limitReached: boolean }> {
+  if (!phone) return { sent: false, limitReached: false };
   const since = reuseSince(attemptStartedAt);
-  const hit = await prisma.bdappsSubscriptionEvent.findFirst({
+  const rows = await prisma.bdappsSubscriptionEvent.findMany({
     where: {
       phone,
       source: SOURCE,
       status: "UNREGISTERED",
       received_at: { gte: since },
     },
-    select: { id: true },
+    select: { time_stamp: true },
   });
-  return hit !== null;
+  return {
+    sent: rows.length > 0,
+    limitReached: rows.some((r) => r.time_stamp === "E1853"),
+  };
 }
