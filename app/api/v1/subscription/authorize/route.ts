@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { otpRecentlySent } from "@/lib/bdapps/otp-probe";
 import { requireUserId } from "@/lib/require-user";
 import { prisma } from "@/lib/prisma";
 import {
@@ -58,12 +59,25 @@ export async function GET(request: NextRequest) {
     );
   }
 
+  // A failed attempt was decided by asking bdApps through the OTP request,
+  // which texts a non-subscriber a code. Tell the app, so it can explain that
+  // text instead of leaving the user with an unexplained OTP.
+  let otpSent = false;
+  if (record.status !== "SUCCESS") {
+    const user = await prisma.user.findUnique({
+      where: { id: guard.userId },
+      select: { phone: true },
+    });
+    otpSent = await otpRecentlySent(user?.phone);
+  }
+
   return NextResponse.json({
     ok: true,
     data: {
       status: record.status,
       plan_name: record.plan_name,
       completed_at: record.completed_at?.toISOString() ?? null,
+      otp_sent: otpSent,
     },
   });
 }

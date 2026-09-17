@@ -64,6 +64,60 @@ export function classifyOtpProbe(
   return "UNKNOWN";
 }
 
+/** How long one probe may hold the number before the lock is considered stale. */
+const LOCK_MS = 30 * 1000;
+
+/** How long a caller that lost the race waits for the winner's verdict. */
+const WAIT_FOR_WINNER_MS = 15 * 1000;
+
+/**
+ * Take the per-number lock, or report that someone else holds it.
+ *
+ * A single statement, so two callers arriving in the same instant cannot both
+ * win: the conditional upsert only writes (and only returns a row) when there
+ * is no live lock.
+ */
+async function acquireProbeLock(phone: string): Promise<boolean> {
+  const rows = await prisma.$queryRaw<Array<{ phone: string }>>`
+    INSERT INTO "BdappsProbeLock" ("phone", "locked_until")
+    VALUES (${phone}, NOW() + (${LOCK_MS} * INTERVAL '1 millisecond'))
+    ON CONFLICT ("phone") DO UPDATE
+      SET "locked_until" = EXCLUDED."locked_until"
+      WHERE "BdappsProbeLock"."locked_until" < NOW()
+    RETURNING "phone"
+  `;
+  return rows.length > 0;
+}
+
+async function releaseProbeLock(phone: string): Promise<void> {
+  await prisma.bdappsProbeLock
+    .update({ where: { phone }, data: { locked_until: new Date(0) } })
+    .catch(() => undefined);
+}
+
+async function waitForWinner(
+  phone: string,
+): Promise<"REGISTERED" | "UNREGISTERED" | null> {
+  const deadline = Date.now() + WAIT_FOR_WINNER_MS;
+  while (Date.now() < deadline) {
+    await new Promise((r) => setTimeout(r, 750));
+    const verdict = await recentVerdict(phone);
+    if (verdict) return verdict;
+  }
+  return null;
+}
+
+function fromVerdict(
+  verdict: "REGISTERED" | "UNREGISTERED",
+  how: string,
+): BdappsCheckResult {
+  return {
+    subscribed: verdict === "REGISTERED",
+    status: verdict === "REGISTERED" ? "REGISTERED" : "NOT_REGISTERED",
+    detail: `otp-probe=${verdict} (${how})`,
+  };
+}
+
 async function recentVerdict(
   phone: string,
 ): Promise<"REGISTERED" | "UNREGISTERED" | null> {
@@ -87,14 +141,32 @@ export async function probeRegistrationViaOtp(
   phone: string,
 ): Promise<BdappsCheckResult> {
   const reused = await recentVerdict(phone);
-  if (reused) {
+  if (reused) return fromVerdict(reused, "reused");
+
+  // Someone else is asking right now. Wait for their answer rather than
+  // asking too - asking is what sends the second text.
+  if (!(await acquireProbeLock(phone))) {
+    const theirs = await waitForWinner(phone);
+    if (theirs) return fromVerdict(theirs, "waited");
     return {
-      subscribed: reused === "REGISTERED",
-      status: reused === "REGISTERED" ? "REGISTERED" : "NOT_REGISTERED",
-      detail: `otp-probe=${reused} (reused)`,
+      subscribed: false,
+      status: "GATEWAY_ERROR",
+      detail: "otp-probe=busy",
     };
   }
 
+  try {
+    // Checked again under the lock: the previous holder may have finished
+    // between our first look and taking the lock.
+    const justDecided = await recentVerdict(phone);
+    if (justDecided) return fromVerdict(justDecided, "reused");
+    return await askBdapps(phone);
+  } finally {
+    await releaseProbeLock(phone);
+  }
+}
+
+async function askBdapps(phone: string): Promise<BdappsCheckResult> {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), TIMEOUT_MS);
   try {
@@ -167,4 +239,30 @@ export async function probeRegistrationViaOtp(
   } finally {
     clearTimeout(timer);
   }
+}
+
+/**
+ * Whether a probe texted this number an OTP recently.
+ *
+ * The app shows "your payment did not go through, so bdApps sent you an OTP -
+ * ignore it" when this is true. Without that, a user who has just cancelled
+ * receives an unexplained code from the operator, which reads like someone is
+ * trying to get into their account.
+ */
+export async function otpRecentlySent(
+  phone: string | null | undefined,
+  withinMs: number = PROBE_REUSE_MS,
+): Promise<boolean> {
+  if (!phone) return false;
+  const since = new Date(Date.now() - withinMs);
+  const hit = await prisma.bdappsSubscriptionEvent.findFirst({
+    where: {
+      phone,
+      source: SOURCE,
+      status: "UNREGISTERED",
+      received_at: { gte: since },
+    },
+    select: { id: true },
+  });
+  return hit !== null;
 }

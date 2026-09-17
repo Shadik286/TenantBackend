@@ -222,6 +222,18 @@ model BdappsSubscriptionEvent {
   @@index([subscriber_id])
 }
 
+/// One OTP probe at a time per number.
+///
+/// Asking bdApps via the OTP request texts a non-subscriber an OTP. After a
+/// payment the return URL, the app's poll and its resume handler all arrive
+/// within the same second, each found no recent verdict, and each asked - two
+/// texts for one cancelled payment. A row here is held while a probe runs;
+/// anyone else waits for its verdict instead of asking again.
+model BdappsProbeLock {
+  phone        String   @id
+  locked_until DateTime
+}
+
 model Coupon {
   id               String    @id @default(uuid())
   code             String    @unique

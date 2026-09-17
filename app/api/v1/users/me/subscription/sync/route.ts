@@ -54,6 +54,10 @@ export async function POST() {
       "We could not reach the subscription service. Please try again shortly.",
   };
 
+  const probeTextedThem =
+    result.planName !== "PRO" &&
+    /otp-probe=(UNREGISTERED|OTP-ISSUED)/.test(result.detail ?? "");
+
   console.log("[subscription/sync]", {
     userId: guard.userId,
     outcome: result.outcome,
@@ -72,6 +76,9 @@ export async function POST() {
       // down from outside the logs - which is how a working bridge and a
       // failing call looked identical.
       detail: result.detail ?? null,
+      // True when the check texted this user an OTP - they are not
+      // subscribed - so the app can say the code is safe to ignore.
+      otp_sent: probeTextedThem,
     },
   });
 }
