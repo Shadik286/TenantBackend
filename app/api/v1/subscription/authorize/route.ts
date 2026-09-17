@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { otpOutcomeSince } from "@/lib/bdapps/otp-probe";
+import { otpResultFlags } from "@/lib/bdapps/otp-probe";
 import { requireUserId } from "@/lib/require-user";
 import { prisma } from "@/lib/prisma";
 import {
@@ -53,7 +53,7 @@ export async function GET(request: NextRequest) {
       status: true,
       plan_name: true,
       completed_at: true,
-      created_at: true,
+      otp_result: true,
     },
   });
 
@@ -64,20 +64,9 @@ export async function GET(request: NextRequest) {
     );
   }
 
-  // A failed attempt was decided by asking bdApps through the OTP request,
-  // which texts a non-subscriber a code. Tell the app, so it can explain that
-  // text instead of leaving the user with an unexplained OTP.
-  let otpSent = false;
-  let otpLimitReached = false;
-  if (record.status !== "SUCCESS") {
-    const user = await prisma.user.findUnique({
-      where: { id: guard.userId },
-      select: { phone: true },
-    });
-    const outcome = await otpOutcomeSince(user?.phone, record.created_at);
-    otpSent = outcome.sent;
-    otpLimitReached = outcome.limitReached;
-  }
+  // What asking bdApps did to the number for this attempt - stored on the row
+  // by the one verify call that asked.
+  const { otpSent, otpLimitReached } = otpResultFlags(record.otp_result);
 
   return NextResponse.json({
     ok: true,

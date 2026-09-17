@@ -16,7 +16,6 @@
 import { prisma } from "@/lib/prisma";
 import { checkBdappsSubscription } from "@/lib/bdapps";
 import { checkBkashSubscriber } from "@/lib/bdapps/subscribers";
-import { probeRegistrationViaOtp } from "@/lib/bdapps/otp-probe";
 import { subscriberPhoneFromReturn } from "@/lib/bdapps/subscription";
 import { Prisma } from "@prisma/client";
 
@@ -45,15 +44,7 @@ export type SyncResult = {
  * neither should fail because one account or one gateway call misbehaved.
  */
 export type SyncOptions = {
-  /**
-   * Also ask bdApps through the OTP request when getStatus cannot answer.
-   *
-   * On the bKash application getStatus answers E1951 for everyone, so this is
-   * the only way a bKash subscription gets confirmed. It is opt-in because a
-   * non-subscriber is texted an OTP when asked: the user-triggered paths (the
-   * post-payment poll, "sync now", sign-in) pass true; the nightly
-   * reconciliation does not, or every lapsed account would get a text a night.
-   */
+  /** Kept for existing callers; sync no longer sends the OTP request. */
   probeWithOtp?: boolean;
 };
 
@@ -118,26 +109,10 @@ export async function syncSubscriptionWithBdapps(
     checkBkashSubscriber(phone),
   ]);
 
-  // getStatus first: it is free and texts nobody. Only when it cannot confirm
-  // is bdApps asked the way that works for bKash.
-  //
-  // The probe is scoped to the attempt being polled - the user's latest one,
-  // if it is recent - so a new payment asks bdApps afresh instead of
-  // inheriting the answer an earlier attempt got.
-  let carrier = statusCheck;
-  if (!statusCheck.subscribed && options.probeWithOtp) {
-    const attempt = await prisma.subscriptionAuthorization.findFirst({
-      where: {
-        user_id: userId,
-        created_at: { gte: new Date(Date.now() - 60 * 60 * 1000) },
-      },
-      orderBy: { created_at: "desc" },
-      select: { created_at: true },
-    });
-    carrier = await probeRegistrationViaOtp(phone, {
-      attemptStartedAt: attempt?.created_at,
-    });
-  }
+  // No OTP ask here. bdApps is asked through the OTP request once per trip
+  // through the payment gateway, by the verify call the app makes when the
+  // user comes back - see lib/bdapps/verify-attempt.ts.
+  const carrier = statusCheck;
 
   // bdApps outranks our own file. When an application that KNOWS this
   // subscriber says UNREGISTERED, that is the answer, whatever the local

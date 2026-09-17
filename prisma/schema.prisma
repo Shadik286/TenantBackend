@@ -172,6 +172,13 @@ model SubscriptionAuthorization {
   plan_name    String                 @default("PRO")
   /// Whatever the gateway put on the return URL, for support and debugging.
   return_payload Json?
+  /// When bdApps was asked about this attempt. Set by a conditional update, so
+  /// exactly one request per attempt ever sends the OTP request - however many
+  /// times the app checks.
+  verify_started_at DateTime?
+  /// What bdApps answered: E1351 (registered), OTP-ISSUED, E1853 (OTP limit),
+  /// or the error when there was no answer.
+  otp_result   String?
   created_at   DateTime               @default(now())
   completed_at DateTime?
 

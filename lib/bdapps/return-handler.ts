@@ -1,16 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
-import {
-  isExplicitFailureReturn,
-  subscriberPhoneFromReturn,
-} from "@/lib/bdapps/subscription";
-import { checkBdappsSubscription } from "@/lib/bdapps";
-import { probeRegistrationViaOtp } from "@/lib/bdapps/otp-probe";
-import {
-  checkBkashSubscriber,
-  recordBkashSubscriber,
-} from "@/lib/bdapps/subscribers";
-import { getDefaultFreePlanId } from "@/lib/plans/get-plan";
 
 
 
@@ -124,255 +113,24 @@ export async function handleSubscriptionReturn(
     );
   }
 
-  // Whether this counts as a successful subscription.
+  // The payment step is over. Whether it went through is NOT decided here.
   //
-  // bdApps sends no success parameter — arriving here IS the completion
-  // signal (see isExplicitFailureReturn). But arrival alone must not grant
-  // PRO: the requestId is a 15-digit timestamp-prefixed value, which is
-  // guessable enough that "you reached this URL" is too weak a credential to
-  // hand out a paid plan on.
+  // bdApps shows its "success" page whether or not the payment went through,
+  // and sends the user here - sometimes more than once, and alongside the
+  // app's own visit to this same URL. When this route asked bdApps itself, one
+  // trip produced up to three concurrent asks, answers that came back "busy",
+  // and OTPs sent twice.
   //
-  // So we ask the authority. checkBdappsSubscription hits
-  // check_subscription.php, which asks bdApps whether the number is
-  // REGISTERED. That is the same source the nightly reconciliation trusts,
-  // so the two can never disagree about what happened.
-  let success = false;
-  // Three outcomes, not two: confirmed (PRO), definitely not (FAILED), and
-  // "bdApps has not said yet", which must settle as neither. A row left
-  // PENDING is retried by the app's poll and by the nightly reconciliation.
-  let unconfirmed = false;
-
-  if (isExplicitFailureReturn(params)) {
-    console.log("[subscription/return] explicit failure on return", {
-      requestId,
-    });
-  } else {
-    // Prefer the number bdApps handed back; fall back to the one on file.
-    const user = await prisma.user.findUnique({
-      where: { id: record.user_id },
-      select: { phone: true },
-    });
-    const returnedPhone = subscriberPhoneFromReturn(params);
-    const phone = returnedPhone ?? user?.phone ?? null;
-
-    // bdApps just told us which number is subscribing. If the account has none
-    // on file - every Google signup starts that way - write it down, because
-    // the phone is the only key we have for asking bdApps about this user
-    // later. Without this, every later sync and the nightly reconciliation
-    // both answer NO_PHONE and silently never ask at all.
-    if (returnedPhone && !user?.phone) {
-      try {
-        await prisma.user.update({
-          where: { id: record.user_id },
-          data: { phone: returnedPhone },
-        });
-      } catch (err) {
-        // Most likely the number already belongs to another account. Not fatal
-        // here: the subscription still activates, and support can untangle the
-        // duplicate.
-        console.warn("[subscription/return] could not save subscriber phone", {
-          requestId,
-          err,
-        });
-      }
-    }
-
-    if (!phone) {
-      // Nothing to ask bdApps about, so there is nothing to confirm - and an
-      // unconfirmed return must not grant PRO. Left unsettled rather than
-      // failed: the attempt stays open, and the poll or the nightly
-      // reconciliation activates it once a number is on file and bdApps
-      // confirms.
-      console.warn("[subscription/return] no phone to verify, leaving open", {
-        requestId,
-      });
-      unconfirmed = true;
-    } else {
-      // Ask bdApps, and ONLY bdApps.
-      //
-      // This used to write the number into the bKash registry first and then
-      // "confirm" by reading that write back, which made landing on this URL
-      // its own proof of payment - cancel at the gateway, still arrive here,
-      // still get PRO. The registry is our own record, not an authority, so
-      // it is now written AFTER bdApps confirms and never consulted to decide.
-      //
-      // checkBdappsSubscription asks every configured application (carrier and
-      // bKash both, when BDAPPS_BKASH_BASE is set), because a bKash subscriber
-      // is invisible to the carrier application's lookup.
-      // getStatus cannot confirm a bKash subscription (E1951 for everyone), so
-      // when it does not say yes, ask the way that does: the OTP request, which
-      // answers E1351 "already registered" for a real subscriber. This is the
-      // moment the user has just come back from paying - exactly when a probe
-      // is worth its cost.
-      const statusCheck = await checkBdappsSubscription(phone);
-      const carrier = statusCheck.subscribed
-        ? statusCheck
-        : await probeRegistrationViaOtp(phone, {
-            attemptStartedAt: record.created_at,
-          });
-      const bkash = await checkBkashSubscriber(phone);
-
-      // bKash never shows up in getStatus, so the registry is the only place a
-      // bKash subscription can be seen - see lib/plans/sync.ts for why it is
-      // trustworthy now and was not before.
-      // Same order of authority as the nightly reconciliation: a definite
-      // UNREGISTERED from an application that knows this subscriber beats the
-      // local bKash list, which only speaks when bdApps has no opinion.
-      const bdappsSaysNo = carrier.status === "NOT_REGISTERED";
-
-      // How this return was reached, and therefore what it is worth.
-      //
-      // bdApps' own redirect carries no parameters at all, so an absent `src`
-      // means they sent the user here - which they only do once the payment
-      // completed. `success-page` means the app read their "successfully
-      // processed" screen, because that page promises a redirect and does not
-      // always perform one. Both are bdApps saying the payment happened.
-      //
-      // `manual` is the user pressing "I've paid". That is not evidence, and
-      // treating it as such is how cancelling the gateway still granted PRO.
-      const src = params.get("src");
-      const gatewaySaysPaid = src === null || src === "success-page";
-
-      // A bKash subscription exists nowhere upstream - no status API, which is
-      // why the reference project's return page records it locally and treats
-      // that record as the answer ever after. So for bKash, a return that
-      // bdApps stands behind IS the confirmation; there is nothing else to ask.
-      // Whether the gateway stands behind this return is recorded, but it is
-      // not what grants the plan: bdApps' answer to "is this number
-      // registered" is. Arriving here only decides whether it is worth
-      // asking them at all.
-      if (!gatewaySaysPaid) {
-        console.log("[subscription/return] user-asserted return, not a grant", {
-          requestId,
-          src,
-        });
-      }
-
-      // Same rule as the nightly reconciliation: getStatus, or a record that
-      // bdApps' own notification verified. An unverified record is someone
-      // having reached this URL, which is not evidence of anything.
-      if (carrier.subscribed || (bkash.subscribed && bkash.verified)) {
-        success = true;
-        // The only local trace a bKash payment leaves, and what every later
-        // check reads.
-        await recordBkashSubscriber(phone, request.nextUrl.search);
-      } else if (bdappsSaysNo) {
-        console.log("[subscription/return] bdApps does not show a subscription", {
-          requestId,
-          carrier: carrier.detail,
-          bkashStoreHasRecord: bkash.subscribed,
-        });
-      } else {
-        // TIMEOUT / GATEWAY_ERROR - bdApps did not answer, so there is no
-        // confirmation, so no PRO. This branch used to accept, on the
-        // reasoning that the user had completed the flow; but "reached our
-        // return URL" is not payment, and the gateway answering unclearly is
-        // exactly what happens when someone cancels partway. Leaving it
-        // unsettled costs a real payer a short wait; accepting costs us the
-        // plan.
-        console.warn("[subscription/return] gateway unclear, leaving open", {
-          requestId,
-          carrierStatus: carrier.status,
-          bkashStoreReachable: bkash.reachable,
-        });
-        unconfirmed = true;
-      }
-    }
-  }
-
-  if (unconfirmed) {
-    // Record what came back, but leave the status PENDING so a later check can
-    // still settle it either way.
-    await prisma.subscriptionAuthorization.updateMany({
-      where: { request_id: requestId, status: "PENDING" },
-      data: { return_payload: payload },
-    });
-    return page(
-      "Confirming your subscription",
-      "We are waiting for bdApps to confirm this payment. Return to the app - " +
-        "your plan updates by itself as soon as they confirm. Nothing is " +
-        "activated until they do.",
-      true,
-    );
-  }
-
-  // Claim the row. `status: "PENDING"` in the where clause is the idempotency
-  // guard: only one caller can move it out of PENDING.
-  const claimed = await prisma.subscriptionAuthorization.updateMany({
+  // So this only records the visit. The app asks bdApps exactly once for the
+  // attempt, when the user is back (POST /api/v1/subscription/verify).
+  await prisma.subscriptionAuthorization.updateMany({
     where: { request_id: requestId, status: "PENDING" },
-    data: {
-      status: success ? "SUCCESS" : "FAILED",
-      return_payload: payload,
-      completed_at: new Date(),
-    },
+    data: { return_payload: payload },
   });
 
-  if (claimed.count === 0) {
-    // Someone else settled it between the read above and this update.
-    return page(
-      "Already processed",
-      "This subscription attempt has already been handled. You can close this page.",
-      true,
-    );
-  }
-
-  if (!success) {
-    return page(
-      "Subscription not completed",
-      "The subscription was not approved. You have not been charged. You can try again from the app.",
-      false,
-    );
-  }
-
-  // Activate PRO. Done after the row is claimed so a failure here cannot be
-  // replayed into a second activation by reloading the page.
-  try {
-    const proPlan = await prisma.plan.findFirst({
-      where: { name: record.plan_name, is_active: true },
-    });
-    const planId = proPlan?.id ?? (await getDefaultFreePlanId());
-
-    const now = new Date();
-    const periodEnd = new Date(now);
-    periodEnd.setDate(periodEnd.getDate() + 30);
-
-    await prisma.subscription.upsert({
-      where: { user_id: record.user_id },
-      create: {
-        user_id: record.user_id,
-        plan_id: planId,
-        status: "ACTIVE",
-        current_period_start: now,
-        current_period_end: periodEnd,
-      },
-      update: {
-        plan_id: planId,
-        status: "ACTIVE",
-        current_period_start: now,
-        current_period_end: periodEnd,
-        cancelled_at: null,
-      },
-    });
-  } catch (err) {
-    // The payment succeeded but we failed to record it. Say nothing
-    // reassuring — this needs a human, and the log plus the SUCCESS row is
-    // what they will work from.
-    console.error("[subscription/return] activation failed", {
-      requestId,
-      userId: record.user_id,
-      err,
-    });
-    return page(
-      "Almost there",
-      "Your payment went through but we could not finish setting up your account. " +
-        "Please contact support with this reference: " + requestId,
-      false,
-    );
-  }
-
   return page(
-    "You're on Pro",
-    "Your subscription is active. You can close this page and return to the app.",
+    "Payment step finished",
+    "Return to the app - it will confirm your subscription and show you the result.",
     true,
   );
 }

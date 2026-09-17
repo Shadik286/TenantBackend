@@ -3,7 +3,7 @@ import { requireUserId } from "@/lib/require-user";
 import { prisma } from "@/lib/prisma";
 import { BDAPPS_BASE } from "@/lib/bdapps";
 import { removeBkashSubscriber } from "@/lib/bdapps/subscribers";
-import { probeRegistrationViaOtp } from "@/lib/bdapps/otp-probe";
+import { askBdappsViaOtp } from "@/lib/bdapps/otp-probe";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -98,15 +98,15 @@ export async function POST() {
     // OTP request answers E1351 while the subscription still exists (and sends
     // nothing); if it issues an OTP instead, the cancellation went through.
     if (!gateway.ok && isTransportFailure(gateway.detail)) {
-      const after = await probeRegistrationViaOtp(user.phone);
+      const after = await askBdappsViaOtp(user.phone);
       console.warn("[unsubscribe] call failed in transit, asked bdApps", {
         userId: guard.userId,
         detail: gateway.detail,
-        nowRegistered: after.status,
+        nowRegistered: after.verdict,
       });
-      if (after.status === "NOT_REGISTERED") {
+      if (after.verdict === "NOT_REGISTERED") {
         gateway.ok = true;
-        gatewayDetail = `${gateway.detail} | verified cancelled: ${after.detail}`;
+        gatewayDetail = `${gateway.detail} | verified cancelled: ${after.result}`;
       }
     }
 

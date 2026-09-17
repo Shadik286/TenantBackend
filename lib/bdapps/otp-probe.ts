@@ -6,61 +6,52 @@
 // address is invalid Or User Already UnRegistered" for every number - including
 // one bdApps itself holds as subscribed. So it cannot confirm anything there.
 //
-// The OTP request can. Asked about that same number, it refuses with:
+// The OTP request can. Asked about a subscribed number it refuses with
 //
-//   {"statusCode":"E1351","statusDetail":"user already registered",
-//    "subscriberId":"tel:8801817932639"}
+//   {"statusCode":"E1351","statusDetail":"user already registered"}
 //
-// That is bdApps saying, in so many words, that the subscription exists. It is
-// also exactly how the reference web client resolves a login it cannot settle
-// with getStatus (`resolveLogin` -> `requestOtp` -> `isAlreadyRegistered`).
+// which is bdApps saying the subscription exists. This is also how the
+// reference web client settles a login getStatus cannot
+// (`resolveLogin` -> `requestOtp` -> `isAlreadyRegistered`).
 //
-// THE COST, AND HOW IT IS CONTAINED
+// HOW OFTEN
 //
-// For a number that is NOT subscribed, the same call succeeds - and bdApps
-// texts that number an OTP. The app polls after a payment and the nightly job
-// walks lapsed accounts, so asked naively this would send a cancelled user a
-// text on every poll and a lapsed one a text every night. So:
+// Once per trip through the payment gateway, with no timing rules on top: the
+// answer is bdApps' own and it is immediate. "Once" is enforced on the payment
+// attempt itself (see app/api/v1/subscription/verify), not by any window here.
+// An earlier version reused answers for ten minutes, which made a new attempt
+// inherit the previous attempt's "no".
 //
-//   * a verdict is recorded and reused for PROBE_REUSE_MS before asking again;
-//   * callers opt in (see syncSubscriptionWithBdapps), and the nightly
-//     reconciliation does not.
-import { prisma } from "@/lib/prisma";
-import { BDAPPS_BASE, type BdappsCheckResult } from "@/lib/bdapps";
+// For a number that is NOT subscribed, this call sends that number an OTP.
+// That is the accepted cost of asking.
+import { BDAPPS_BASE } from "@/lib/bdapps";
 
 const TIMEOUT_MS = Number(process.env.BDAPPS_TIMEOUT_MS ?? 12000);
 
-/** How long a probe's answer stands before bdApps is asked (and texts) again. */
-const PROBE_REUSE_MS = 10 * 60 * 1000;
-
-const SOURCE = "otp-probe";
+export type OtpVerdict = "REGISTERED" | "NOT_REGISTERED" | "UNKNOWN";
 
 /**
  * Read an OTP-request response as a subscription verdict.
  *
  *   E1351 / "already registered"  -> REGISTERED  (bdApps refused: they have one)
+ *   E1853 / OTP limit reached     -> NOT_REGISTERED (bdApps checks registration
+ *                                    before the limit; no SMS goes out)
  *   an OTP was issued             -> NOT_REGISTERED (bdApps started a new one)
  *   E1301 / E1343                 -> UNKNOWN (operator not provisioned for this
  *                                    application - says nothing about the user)
  *   anything else                 -> UNKNOWN
  */
-export function classifyOtpProbe(
-  data: Record<string, unknown>,
-): "REGISTERED" | "NOT_REGISTERED" | "UNKNOWN" {
+export function classifyOtpProbe(data: Record<string, unknown>): OtpVerdict {
   const code = String(data.statusCode ?? "");
-  const message = String(
-    data.statusDetail ?? data.message ?? "",
-  ).toLowerCase();
+  const message = String(data.statusDetail ?? data.message ?? "").toLowerCase();
 
   if (code === "E1351" || message.includes("already registered")) {
     return "REGISTERED";
   }
 
-  // "Maximum number of OTP requests reached for [Renten/tel:...]". bdApps
-  // checks registration BEFORE this limit - observed live, the same number
-  // answered E1853 three times and then E1351 the moment it subscribed - so
-  // being throttled means an OTP would have been issued: not registered. No
-  // SMS goes out in this case.
+  // "Maximum number of OTP requests reached for [Renten/tel:...]". Observed
+  // live: the same number answered E1853 three times and then E1351 the moment
+  // it subscribed, so being throttled means "not registered".
   if (code === "E1853" || message.includes("maximum number of otp")) {
     return "NOT_REGISTERED";
   }
@@ -73,139 +64,21 @@ export function classifyOtpProbe(
   return "UNKNOWN";
 }
 
-/** How long one probe may hold the number before the lock is considered stale. */
-const LOCK_MS = 30 * 1000;
-
-/** How long a caller that lost the race waits for the winner's verdict. */
-const WAIT_FOR_WINNER_MS = 15 * 1000;
-
-/**
- * Take the per-number lock, or report that someone else holds it.
- *
- * A single statement, so two callers arriving in the same instant cannot both
- * win: the conditional upsert only writes (and only returns a row) when there
- * is no live lock.
- */
-async function acquireProbeLock(phone: string): Promise<boolean> {
-  const rows = await prisma.$queryRaw<Array<{ phone: string }>>`
-    INSERT INTO "BdappsProbeLock" ("phone", "locked_until")
-    VALUES (${phone}, NOW() + (${LOCK_MS} * INTERVAL '1 millisecond'))
-    ON CONFLICT ("phone") DO UPDATE
-      SET "locked_until" = EXCLUDED."locked_until"
-      WHERE "BdappsProbeLock"."locked_until" < NOW()
-    RETURNING "phone"
-  `;
-  return rows.length > 0;
-}
-
-async function releaseProbeLock(phone: string): Promise<void> {
-  await prisma.bdappsProbeLock
-    .update({ where: { phone }, data: { locked_until: new Date(0) } })
-    .catch(() => undefined);
-}
-
-/**
- * The earliest verdict worth reusing.
- *
- * A verdict answers the question for one payment attempt. Reusing one from an
- * EARLIER attempt is wrong twice over: the user may have paid since, and a
- * failed attempt gets no OTP - which is what happened when a cancel within ten
- * minutes of the previous one silently inherited its answer. So when the
- * attempt is known, nothing from before it counts.
- */
-function reuseSince(notBefore?: Date): Date {
-  const window = new Date(Date.now() - PROBE_REUSE_MS);
-  return notBefore && notBefore > window ? notBefore : window;
-}
-
-async function waitForWinner(
-  phone: string,
-  notBefore?: Date,
-): Promise<Verdict | null> {
-  const deadline = Date.now() + WAIT_FOR_WINNER_MS;
-  while (Date.now() < deadline) {
-    await new Promise((r) => setTimeout(r, 750));
-    const verdict = await recentVerdict(phone, notBefore);
-    if (verdict) return verdict;
-  }
-  return null;
-}
-
-function fromVerdict(verdict: Verdict, how: string): BdappsCheckResult {
-  return {
-    subscribed: verdict === "REGISTERED",
-    status: verdict === "REGISTERED" ? "REGISTERED" : "NOT_REGISTERED",
-    detail: `otp-probe=${verdict} (${how})`,
-  };
-}
-
-type Verdict = "REGISTERED" | "UNREGISTERED" | "OTP-LIMIT";
-
-async function recentVerdict(
-  phone: string,
-  notBefore?: Date,
-): Promise<Verdict | null> {
-  const since = reuseSince(notBefore);
-  const latest = await prisma.bdappsSubscriptionEvent.findFirst({
-    where: { phone, source: SOURCE, received_at: { gte: since } },
-    orderBy: { received_at: "desc" },
-    select: { status: true, time_stamp: true },
-  });
-  if (!latest) return null;
-  if (latest.status === "REGISTERED") return "REGISTERED";
-  // Kept distinct on reuse: "not registered, and bdApps will not send this
-  // number any more codes today" is what the app needs to tell the user.
-  return latest.time_stamp === "E1853" ? "OTP-LIMIT" : "UNREGISTERED";
-}
-
-/**
- * Ask bdApps, via the OTP request, whether `phone` is subscribed.
- *
- * Never throws. A definite answer is recorded; an unclear one is not, so the
- * next caller asks again rather than inheriting a non-answer.
- */
-export type ProbeOptions = {
+export type OtpAnswer = {
+  verdict: OtpVerdict;
   /**
-   * When the payment attempt being settled started. Verdicts from before it
-   * are not reused, so each attempt asks bdApps once - and a failed one gets
-   * its OTP - while the several checks within one attempt still share a
-   * single answer.
+   * What happened, short: E1351, OTP-ISSUED, E1853, or the failure.
+   * Stored on the payment attempt and shown in logs.
    */
-  attemptStartedAt?: Date;
+  result: string;
+  /** An OTP SMS went to the number. */
+  otpSent: boolean;
+  /** bdApps will not send this number more OTPs today. */
+  otpLimitReached: boolean;
 };
 
-export async function probeRegistrationViaOtp(
-  phone: string,
-  options: ProbeOptions = {},
-): Promise<BdappsCheckResult> {
-  const notBefore = options.attemptStartedAt;
-  const reused = await recentVerdict(phone, notBefore);
-  if (reused) return fromVerdict(reused, "reused");
-
-  // Someone else is asking right now. Wait for their answer rather than
-  // asking too - asking is what sends the second text.
-  if (!(await acquireProbeLock(phone))) {
-    const theirs = await waitForWinner(phone, notBefore);
-    if (theirs) return fromVerdict(theirs, "waited");
-    return {
-      subscribed: false,
-      status: "GATEWAY_ERROR",
-      detail: "otp-probe=busy",
-    };
-  }
-
-  try {
-    // Checked again under the lock: the previous holder may have finished
-    // between our first look and taking the lock.
-    const justDecided = await recentVerdict(phone, notBefore);
-    if (justDecided) return fromVerdict(justDecided, "reused");
-    return await askBdapps(phone);
-  } finally {
-    await releaseProbeLock(phone);
-  }
-}
-
-async function askBdapps(phone: string): Promise<BdappsCheckResult> {
+/** Ask bdApps, once, whether `phone` is subscribed. Never throws. */
+export async function askBdappsViaOtp(phone: string): Promise<OtpAnswer> {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), TIMEOUT_MS);
   try {
@@ -218,105 +91,55 @@ async function askBdapps(phone: string): Promise<BdappsCheckResult> {
     });
     const text = await response.text();
 
-    if (!response.ok) {
-      return {
-        subscribed: false,
-        status: "GATEWAY_ERROR",
-        detail: `otp-probe HTTP ${response.status}`,
-      };
-    }
+    if (!response.ok) return unknown(`HTTP ${response.status}`);
 
     let data: Record<string, unknown>;
     try {
       data = JSON.parse(text) as Record<string, unknown>;
     } catch {
-      return {
-        subscribed: false,
-        status: "UNPARSEABLE",
-        detail: `otp-probe: ${text.slice(0, 120)}`,
-      };
+      return unknown("UNPARSEABLE");
     }
 
     const verdict = classifyOtpProbe(data);
     const code = String(data.statusCode ?? "");
 
-    if (verdict !== "UNKNOWN") {
-      await prisma.bdappsSubscriptionEvent.create({
-        data: {
-          subscriber_id: String(data.subscriberId ?? `tel:${phone}`),
-          phone,
-          status: verdict === "REGISTERED" ? "REGISTERED" : "UNREGISTERED",
-          application_id: null,
-          time_stamp: code || null,
-          source: SOURCE,
-        },
-      });
-    }
-
     if (verdict === "REGISTERED") {
-      return { subscribed: true, status: "REGISTERED", detail: `otp-probe=${code}` };
-    }
-    if (verdict === "NOT_REGISTERED") {
       return {
-        subscribed: false,
-        status: "NOT_REGISTERED",
-        detail: code === "E1853" ? "otp-probe=OTP-LIMIT" : "otp-probe=OTP-ISSUED",
+        verdict,
+        result: code || "E1351",
+        otpSent: false,
+        otpLimitReached: false,
       };
     }
-    return {
-      subscribed: false,
-      status: "GATEWAY_ERROR",
-      detail: `otp-probe=${code || "no-code"}`,
-    };
+    if (verdict === "NOT_REGISTERED") {
+      const limited = code === "E1853";
+      return {
+        verdict,
+        result: limited ? "E1853" : "OTP-ISSUED",
+        otpSent: !limited,
+        otpLimitReached: limited,
+      };
+    }
+    return unknown(code || "NO-CODE");
   } catch (err) {
     const aborted = err instanceof Error && err.name === "AbortError";
-    return {
-      subscribed: false,
-      status: aborted ? "TIMEOUT" : "GATEWAY_ERROR",
-      detail: `otp-probe ${aborted ? "timeout" : "failed"}`,
-    };
+    return unknown(aborted ? "TIMEOUT" : "FAILED");
   } finally {
     clearTimeout(timer);
   }
 }
 
-/**
- * Whether a probe texted this number an OTP recently.
- *
- * The app shows "your payment did not go through, so bdApps sent you an OTP -
- * ignore it" when this is true. Without that, a user who has just cancelled
- * receives an unexplained code from the operator, which reads like someone is
- * trying to get into their account.
- */
-export async function otpRecentlySent(
-  phone: string | null | undefined,
-  attemptStartedAt?: Date,
-): Promise<boolean> {
-  return (await otpOutcomeSince(phone, attemptStartedAt)).sent;
+function unknown(result: string): OtpAnswer {
+  return { verdict: "UNKNOWN", result, otpSent: false, otpLimitReached: false };
 }
 
-/**
- * What asking bdApps did to this number during the attempt: whether a
- * not-registered answer came back (and so an OTP went out), and whether
- * bdApps refused because the number hit its daily OTP limit.
- */
-export async function otpOutcomeSince(
-  phone: string | null | undefined,
-  attemptStartedAt?: Date,
-): Promise<{ sent: boolean; limitReached: boolean }> {
-  if (!phone) return { sent: false, limitReached: false };
-  const since = reuseSince(attemptStartedAt);
-  const rows = await prisma.bdappsSubscriptionEvent.findMany({
-    where: {
-      phone,
-      source: SOURCE,
-      status: "UNREGISTERED",
-      received_at: { gte: since },
-    },
-    select: { time_stamp: true },
-  });
+/** What a stored `otp_result` means for the app. */
+export function otpResultFlags(result: string | null | undefined): {
+  otpSent: boolean;
+  otpLimitReached: boolean;
+} {
   return {
-    sent: rows.length > 0,
-    limitReached: rows.some((r) => r.time_stamp === "E1853"),
+    otpSent: result === "OTP-ISSUED",
+    otpLimitReached: result === "E1853",
   };
 }

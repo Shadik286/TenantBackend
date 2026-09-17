@@ -36,11 +36,7 @@ export async function POST() {
   );
   if (limited) return limited;
 
-  // User-triggered, so asking via the OTP request is acceptable - see
-  // SyncOptions. This is also what runs right after a payment attempt.
-  const result = await syncSubscriptionWithBdapps(guard.userId, {
-    probeWithOtp: true,
-  });
+  const result = await syncSubscriptionWithBdapps(guard.userId);
 
   const messages: Record<typeof result.outcome, string> = {
     UPGRADED: "Your subscription is active. You are on Pro.",
