@@ -209,9 +209,16 @@ model BdappsSubscriptionEvent {
   application_id String?
   /// Their timestamp, kept verbatim.
   time_stamp     String?
+  /// `notification` - bdApps posted it to us.
+  /// `otp-probe`    - we asked, via the OTP request, which answers E1351
+  ///                  "already registered" for a subscriber. Kept apart because
+  ///                  a probe texts a non-subscriber an OTP, so a recent one is
+  ///                  reused instead of asked again.
+  source         String   @default("notification")
   received_at    DateTime @default(now())
 
   @@index([phone, received_at])
+  @@index([phone, source, received_at])
   @@index([subscriber_id])
 }
 

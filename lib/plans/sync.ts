@@ -16,6 +16,7 @@
 import { prisma } from "@/lib/prisma";
 import { checkBdappsSubscription } from "@/lib/bdapps";
 import { checkBkashSubscriber } from "@/lib/bdapps/subscribers";
+import { probeRegistrationViaOtp } from "@/lib/bdapps/otp-probe";
 import { subscriberPhoneFromReturn } from "@/lib/bdapps/subscription";
 import { Prisma } from "@prisma/client";
 
@@ -43,8 +44,22 @@ export type SyncResult = {
  * Never throws — callers are a cron loop and a user-facing endpoint, and
  * neither should fail because one account or one gateway call misbehaved.
  */
+export type SyncOptions = {
+  /**
+   * Also ask bdApps through the OTP request when getStatus cannot answer.
+   *
+   * On the bKash application getStatus answers E1951 for everyone, so this is
+   * the only way a bKash subscription gets confirmed. It is opt-in because a
+   * non-subscriber is texted an OTP when asked: the user-triggered paths (the
+   * post-payment poll, "sync now", sign-in) pass true; the nightly
+   * reconciliation does not, or every lapsed account would get a text a night.
+   */
+  probeWithOtp?: boolean;
+};
+
 export async function syncSubscriptionWithBdapps(
   userId: string,
+  options: SyncOptions = {},
 ): Promise<SyncResult> {
   const user = await prisma.user.findUnique({
     where: { id: userId },
@@ -98,10 +113,17 @@ export async function syncSubscriptionWithBdapps(
   // It no longer writes anything until bdApps confirms, and the notification
   // listener (app/api/bdapps/subscription-notification) writes only on
   // bdApps' own REGISTERED message and removes on UNREGISTERED.
-  const [carrier, bkash] = await Promise.all([
+  const [statusCheck, bkash] = await Promise.all([
     checkBdappsSubscription(phone),
     checkBkashSubscriber(phone),
   ]);
+
+  // getStatus first: it is free and texts nobody. Only when it cannot confirm
+  // is bdApps asked the way that works for bKash.
+  const carrier =
+    statusCheck.subscribed || !options.probeWithOtp
+      ? statusCheck
+      : await probeRegistrationViaOtp(phone);
 
   // bdApps outranks our own file. When an application that KNOWS this
   // subscriber says UNREGISTERED, that is the answer, whatever the local

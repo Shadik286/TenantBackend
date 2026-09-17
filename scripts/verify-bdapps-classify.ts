@@ -10,6 +10,7 @@
 import assert from "node:assert/strict";
 
 import { classify } from "@/lib/bdapps";
+import { classifyOtpProbe } from "@/lib/bdapps/otp-probe";
 
 const cases: Array<{
   name: string;
@@ -105,7 +106,66 @@ const cases: Array<{
   },
 ];
 
+// The OTP request, used where getStatus cannot answer (the bKash application
+// answers E1951 to getStatus for everyone, subscribed or not).
+const otpCases: typeof cases = [
+  {
+    // Captured live on 2026-09-17 from SDKRenten/send_otp.php for a number
+    // bdApps holds as subscribed - the answer getStatus could never give.
+    name: "OTP request refused: user already registered",
+    payload: {
+      success: false,
+      message: "user already registered",
+      referenceNo: null,
+      statusCode: "E1351",
+      statusDetail: "user already registered",
+      version: "1.0",
+      subscriberId: "tel:8801817932639",
+    },
+    expect: "REGISTERED",
+  },
+  {
+    // bdApps started a subscription (and texted an OTP): there was none.
+    name: "OTP issued means not subscribed",
+    payload: {
+      success: true,
+      referenceNo: "213561321321613",
+      statusCode: "S1000",
+      statusDetail: "Success",
+      version: "1.0",
+    },
+    expect: "NOT_REGISTERED",
+  },
+  {
+    name: "OTP refused for an unprovisioned operator says nothing",
+    payload: {
+      success: false,
+      statusCode: "E1343",
+      statusDetail: "non white listed operator",
+    },
+    expect: "UNKNOWN",
+  },
+  {
+    name: "OTP request with no usable body says nothing",
+    payload: { success: false, referenceNo: null },
+    expect: "UNKNOWN",
+  },
+];
+
 let failed = 0;
+for (const testCase of otpCases) {
+  const actual = classifyOtpProbe(testCase.payload);
+  try {
+    assert.equal(actual, testCase.expect);
+    console.log(`  ok    [otp] ${testCase.name} -> ${actual}`);
+  } catch {
+    failed += 1;
+    console.error(
+      `  FAIL  [otp] ${testCase.name}: expected ${testCase.expect}, got ${actual}`,
+    );
+  }
+}
+
 for (const testCase of cases) {
   const actual = classify(testCase.payload);
   try {
@@ -119,5 +179,6 @@ for (const testCase of cases) {
   }
 }
 
-console.log(`\n${cases.length - failed}/${cases.length} passed`);
+const total = cases.length + otpCases.length;
+console.log(`\n${total - failed}/${total} passed`);
 process.exit(failed === 0 ? 0 : 1);

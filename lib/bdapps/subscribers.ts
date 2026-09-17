@@ -159,7 +159,7 @@ export async function lastBdappsNotification(
 ): Promise<"REGISTERED" | "UNREGISTERED" | null> {
   const { prisma } = await import("@/lib/prisma");
   const latest = await prisma.bdappsSubscriptionEvent.findFirst({
-    where: { phone },
+    where: { phone, source: "notification" },
     orderBy: { received_at: "desc" },
     select: { status: true },
   });

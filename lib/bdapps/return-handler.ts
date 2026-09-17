@@ -5,6 +5,7 @@ import {
   subscriberPhoneFromReturn,
 } from "@/lib/bdapps/subscription";
 import { checkBdappsSubscription } from "@/lib/bdapps";
+import { probeRegistrationViaOtp } from "@/lib/bdapps/otp-probe";
 import {
   checkBkashSubscriber,
   recordBkashSubscriber,
@@ -198,7 +199,15 @@ export async function handleSubscriptionReturn(
       // checkBdappsSubscription asks every configured application (carrier and
       // bKash both, when BDAPPS_BKASH_BASE is set), because a bKash subscriber
       // is invisible to the carrier application's lookup.
-      const carrier = await checkBdappsSubscription(phone);
+      // getStatus cannot confirm a bKash subscription (E1951 for everyone), so
+      // when it does not say yes, ask the way that does: the OTP request, which
+      // answers E1351 "already registered" for a real subscriber. This is the
+      // moment the user has just come back from paying - exactly when a probe
+      // is worth its cost.
+      const statusCheck = await checkBdappsSubscription(phone);
+      const carrier = statusCheck.subscribed
+        ? statusCheck
+        : await probeRegistrationViaOtp(phone);
       const bkash = await checkBkashSubscriber(phone);
 
       // bKash never shows up in getStatus, so the registry is the only place a
