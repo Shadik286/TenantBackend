@@ -77,24 +77,36 @@ type GooglePayload = {
   picture?: string;
 };
 
+/**
+ * The answer a client gets when something went wrong on our side.
+ *
+ * Deliberately says nothing about what. These responses used to carry the
+ * server's own words - a missing NEXTAUTH_SECRET, the GOOGLE_CLIENT_IDS
+ * setup hint, the raw JWT verification error, and on a failed signup the raw
+ * database error under `details` - and the app displayed them to users. The
+ * specifics go to the server log, where they are useful and not public.
+ */
+function serverError(status: number, code: string, logContext: string, detail?: unknown) {
+  console.error(`[google/login] ${logContext}`, detail ?? "");
+  return NextResponse.json(
+    { error: code, message: "Something went wrong. Please try again later." },
+    { status },
+  );
+}
+
 export async function POST(request: Request) {
   const SECRET = process.env.NEXTAUTH_SECRET;
   if (!SECRET) {
-    return NextResponse.json(
-      { error: "NEXTAUTH_SECRET is not set on the server." },
-      { status: 500 },
-    );
+    return serverError(500, "SERVER_ERROR", "NEXTAUTH_SECRET is not set");
   }
 
   const audiences = allowedAudiences();
   if (audiences.length === 0) {
-    return NextResponse.json(
-      {
-        error: "GOOGLE_NOT_CONFIGURED",
-        message:
-          "GOOGLE_CLIENT_IDS is not set on the server. Add the OAuth client ID(s) that appear in the ID token aud claim (on Android this is the Web / serverClientId).",
-      },
-      { status: 503 },
+    return serverError(
+      503,
+      "GOOGLE_NOT_CONFIGURED",
+      "GOOGLE_CLIENT_IDS is not set. Add the OAuth client ID(s) that appear in " +
+        "the ID token aud claim (on Android this is the Web / serverClientId).",
     );
   }
 
@@ -109,7 +121,10 @@ export async function POST(request: Request) {
     "";
 
   if (!rawToken) {
-    return NextResponse.json({ error: "idToken is required." }, { status: 400 });
+    return NextResponse.json(
+      { error: "ID_TOKEN_REQUIRED", message: "Something went wrong. Please try again later." },
+      { status: 400 },
+    );
   }
 
   // Per-IP only: we have no trustworthy identifier until the token is verified,
@@ -135,10 +150,15 @@ export async function POST(request: Request) {
     });
     claims = payload as GooglePayload;
   } catch (err) {
+    // The verifier's own message ("aud" claim check failed, and so on) is
+    // for us, not for the person signing in.
     const message = err instanceof Error ? err.message : "Unknown error";
     console.error("[google/login] token verification failed:", message);
     return NextResponse.json(
-      { error: "INVALID_GOOGLE_TOKEN", message },
+      {
+        error: "INVALID_GOOGLE_TOKEN",
+        message: "We could not verify your Google sign in. Please try again.",
+      },
       { status: 401 },
     );
   }
@@ -147,7 +167,10 @@ export async function POST(request: Request) {
     typeof claims.email === "string" ? claims.email.trim().toLowerCase() : "";
   if (!email) {
     return NextResponse.json(
-      { error: "Google token carried no email address." },
+      {
+        error: "GOOGLE_TOKEN_INCOMPLETE",
+        message: "We could not verify your Google sign in. Please try again.",
+      },
       { status: 400 },
     );
   }
@@ -174,7 +197,10 @@ export async function POST(request: Request) {
   const googleSub = typeof claims.sub === "string" ? claims.sub : null;
   if (!googleSub) {
     return NextResponse.json(
-      { error: "Google token carried no subject claim." },
+      {
+        error: "GOOGLE_TOKEN_INCOMPLETE",
+        message: "We could not verify your Google sign in. Please try again.",
+      },
       { status: 400 },
     );
   }
@@ -260,17 +286,24 @@ export async function POST(request: Request) {
         return created;
       });
     } catch (err) {
-      const message = err instanceof Error ? err.message : "Unknown error";
-      console.error("[google/login] account creation failed:", message);
-      return NextResponse.json(
-        { error: "Failed to create account.", details: message },
-        { status: 500 },
+      // The raw database error names tables and constraints; it stays here.
+      return serverError(
+        500,
+        "SERVER_ERROR",
+        "account creation failed",
+        err instanceof Error ? err.message : err,
       );
     }
   }
 
   if (!user.is_active || user.deleted_at) {
-    return NextResponse.json({ error: "Account is disabled." }, { status: 403 });
+    return NextResponse.json(
+      {
+        error: "ACCOUNT_DISABLED",
+        message: "This account has been disabled. Please contact support.",
+      },
+      { status: 403 },
+    );
   }
 
   // A short-lived access token plus a revocable refresh token, the same pair
