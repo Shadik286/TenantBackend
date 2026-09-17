@@ -3,6 +3,7 @@ import { requireUserId } from "@/lib/require-user";
 import { prisma } from "@/lib/prisma";
 import { BDAPPS_BASE } from "@/lib/bdapps";
 import { removeBkashSubscriber } from "@/lib/bdapps/subscribers";
+import { probeRegistrationViaOtp } from "@/lib/bdapps/otp-probe";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -62,6 +63,16 @@ async function callGatewayUnsubscribe(phone: string): Promise<{
   }
 }
 
+/**
+ * Whether the failure was the connection rather than bdApps' answer - the
+ * cases where the cancellation may well have happened anyway.
+ */
+function isTransportFailure(detail: string): boolean {
+  return /curl failed|connection reset|timed out|timeout|aborted|recv failure|HTTP 5\d\d/i.test(
+    detail,
+  );
+}
+
 export async function POST() {
   const guard = await requireUserId();
   if ("response" in guard) return guard.response;
@@ -76,6 +87,28 @@ export async function POST() {
   if (user?.phone) {
     const gateway = await callGatewayUnsubscribe(user.phone);
     gatewayDetail = gateway.detail;
+
+    // A failed call is not the same as a refused one. Observed live: the
+    // bridge's request to bdApps died with "Connection reset by peer", so it
+    // reported failure - but bdApps had already cancelled the subscription.
+    // The request landed and only the answer was lost, and taking that at face
+    // value left the account on PRO with nothing being billed.
+    //
+    // So when the call itself failed, ask bdApps what actually happened. The
+    // OTP request answers E1351 while the subscription still exists (and sends
+    // nothing); if it issues an OTP instead, the cancellation went through.
+    if (!gateway.ok && isTransportFailure(gateway.detail)) {
+      const after = await probeRegistrationViaOtp(user.phone);
+      console.warn("[unsubscribe] call failed in transit, asked bdApps", {
+        userId: guard.userId,
+        detail: gateway.detail,
+        nowRegistered: after.status,
+      });
+      if (after.status === "NOT_REGISTERED") {
+        gateway.ok = true;
+        gatewayDetail = `${gateway.detail} | verified cancelled: ${after.detail}`;
+      }
+    }
 
     if (!gateway.ok) {
       // Stop here. Downgrading now would strip their PRO features while the
