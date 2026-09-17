@@ -1,7 +1,6 @@
 import { NextResponse } from "next/server";
 import { requireUserId } from "@/lib/require-user";
 import { syncSubscriptionWithBdapps } from "@/lib/plans/sync";
-import { RATE_LIMITS, enforceRateLimit } from "@/lib/rate-limit";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -24,17 +23,11 @@ export const maxDuration = 30;
 // someone who has just paid and been told "Free" will not wait until 2am, and
 // without this their only options are to contact support or pay again.
 //
-// Rate limited because each call reaches a third-party gateway.
+// Not rate limited: the person pressing it has usually just paid.
 
 export async function POST() {
   const guard = await requireUserId();
   if ("response" in guard) return guard.response;
-
-  const limited = await enforceRateLimit(
-    [`subsync:user:${guard.userId}`],
-    RATE_LIMITS.subscriptionSync,
-  );
-  if (limited) return limited;
 
   const result = await syncSubscriptionWithBdapps(guard.userId);
 

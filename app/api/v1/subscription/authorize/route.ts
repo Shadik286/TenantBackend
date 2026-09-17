@@ -7,7 +7,6 @@ import {
   buildAuthorizeUrl,
   makeAuthorizeRequest,
 } from "@/lib/bdapps/subscription";
-import { RATE_LIMITS, enforceRateLimit } from "@/lib/rate-limit";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -86,13 +85,8 @@ export async function POST(request: NextRequest) {
   if ("response" in guard) return guard.response;
   const userId = guard.userId;
 
-  // Each attempt writes a row and sends someone to a payment page. Capped per
-  // user so a stuck client cannot fill the table or spam the gateway.
-  const limited = await enforceRateLimit(
-    [`subauth:user:${userId}`],
-    RATE_LIMITS.subscriptionAuthorize,
-  );
-  if (limited) return limited;
+  // Deliberately not rate limited: a user retrying a failed payment must never
+  // be told to wait. bdApps enforces its own per-number limits.
 
   const credentials = bdappsCredentials();
   if (!credentials) {
